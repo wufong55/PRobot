@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>兒童互動編程機器人｜指令卡與地圖卡網頁模組</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- 全域共用 SVG Pattern 與 Gradient 定義，避免切換分頁或移除卡片時參照失效 -->
+  <svg width="0" height="0" style="position:absolute;pointer-events:none;" aria-hidden="true">
+    <defs>
+      <pattern id="hz_100_100" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="6" height="12" fill="#facc15"/>
+        <rect x="6" width="6" height="12" fill="#1f2937"/>
+      </pattern>
+      <pattern id="hz_200_100" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="6" height="12" fill="#facc15"/>
+        <rect x="6" width="6" height="12" fill="#1f2937"/>
+      </pattern>
+      <pattern id="chk_a1" width="25" height="25" patternUnits="userSpaceOnUse">
+        <rect width="25" height="25" fill="#f1f5f9"/>
+        <rect width="12.5" height="12.5" fill="#cbd5e1"/>
+        <rect x="12.5" y="12.5" width="12.5" height="12.5" fill="#cbd5e1"/>
+      </pattern>
+      <linearGradient id="rainbowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#ef4444"/>
+        <stop offset="20%" stop-color="#f97316"/>
+        <stop offset="40%" stop-color="#eab308"/>
+        <stop offset="60%" stop-color="#22c55e"/>
+        <stop offset="80%" stop-color="#3b82f6"/>
+        <stop offset="100%" stop-color="#a855f7"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <!-- 頂部導覽列 -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">🤖</div>
+      <div>
+        <h1>兒童互動編程機器人</h1>
+        <p class="brand-sub">指令卡拖拉編程 × 自由排列地圖模擬模組</p>
+      </div>
+    </div>
+
+    <nav class="main-nav" role="tablist">
+      <button class="nav-tab active" data-view="workspace" role="tab" aria-selected="true">🎮 編程與地圖實驗室</button>
+      <button class="nav-tab" data-view="cmd-catalog" role="tab" aria-selected="false">🃏 指令卡圖鑑 <span class="count-pill" id="cmdTotalCount">63</span></button>
+      <button class="nav-tab" data-view="map-catalog" role="tab" aria-selected="false">🗺️ 地圖卡圖鑑 <span class="count-pill" id="mapTotalCount">19</span></button>
+    </nav>
+
+    <div class="header-actions">
+      <button id="btnToggleStock" class="btn btn-ghost btn-sm" title="切換實體盒裝數量提醒模式">📦 套件數量：<span id="stockModeText">自由模式</span></button>
+      <button id="btnMute" class="btn btn-ghost btn-sm" title="開啟或靜音音效">🔊 音效開</button>
+      <button id="btnExport" class="btn btn-ghost btn-sm" title="匯出地圖與程式 JSON">💾 匯出</button>
+      <label class="btn btn-ghost btn-sm file-label" title="匯入先前儲存的 JSON">
+        📂 匯入
+        <input type="file" id="inputImport" accept=".json" hidden />
+      </label>
+    </div>
+  </header>
+
+  <!-- ==================== 視圖 1：主互動編程與地圖實驗室 ==================== -->
+  <main id="view-workspace" class="workspace-view active" role="tabpanel">
+    <!-- 左半邊：自由排列地圖舞台 + 地圖卡抽屜 -->
+    <section class="panel map-panel">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <h2>🗺️ 自由排列地圖舞台</h2>
+          <span class="hint-badge">拖曳地圖卡放入格子・點擊已放卡片可翻面／旋轉</span>
+        </div>
+        <div class="map-toolbar">
+          <select id="presetSelect" class="select-sm" aria-label="選擇預設地圖範本"></select>
+          <button id="btnLoadPreset" class="btn btn-secondary btn-sm">載入範本</button>
+          <select id="gridSizeSelect" class="select-sm" aria-label="地圖大小">
+            <option value="5x4">5×4</option>
+            <option value="6x5" selected>6×5</option>
+            <option value="7x5">7×5</option>
+            <option value="8x6">8×6</option>
+            <option value="16x8">16×8 (自然保育區)</option>
+          </select>
+          <button id="btnClearMap" class="btn btn-danger-outline btn-sm">清空地圖</button>
+        </div>
+      </div>
+
+      <!-- 網格舞台容器（含 A~P 與 1~8 座標軸） -->
+      <div class="stage-wrapper">
+        <div class="stage-board-frame">
+          <div class="board-corner"></div>
+          <div id="colHeaders" class="col-headers" aria-hidden="true"></div>
+          <div id="rowHeaders" class="row-headers" aria-hidden="true"></div>
+          <div id="mapGrid" class="map-grid" role="grid" aria-label="機器人地圖網格"></div>
+        </div>
+      </div>
+
+      <!-- 機器人執行控制列 + 初始方向設定 -->
+      <div class="run-controls">
+        <div class="run-buttons">
+          <button id="btnRun" class="btn btn-primary">▶ 執行程式</button>
+          <button id="btnPause" class="btn btn-warning" disabled>⏸ 暫停</button>
+          <button id="btnStep" class="btn btn-info">⏭ 單步執行</button>
+          <button id="btnReset" class="btn btn-secondary">⏹ 重置位置</button>
+        </div>
+        <div class="run-meta">
+          <div class="dir-picker" id="initialDirPicker" role="group" aria-label="設定機器人初始方向">
+            <span class="dir-picker-label">初始方向</span>
+            <button type="button" class="dir-btn" data-dir="3" title="初始面向：上 (↑)">⬆️ 上</button>
+            <button type="button" class="dir-btn" data-dir="1" title="初始面向：下 (↓)">⬇️ 下</button>
+            <button type="button" class="dir-btn" data-dir="2" title="初始面向：左 (←)">⬅️ 左</button>
+            <button type="button" class="dir-btn active" data-dir="0" title="初始面向：右 (→)">➡️ 右</button>
+          </div>
+          <label class="speed-label">速度
+            <select id="speedSelect" class="select-sm">
+              <option value="0.5">0.5× 慢速</option>
+              <option value="1" selected>1× 標準</option>
+              <option value="1.5">1.5× 輕快</option>
+              <option value="2">2× 快速</option>
+            </select>
+          </label>
+          <div class="robot-status-pill" id="robotStatusPill">就緒</div>
+        </div>
+      </div>
+
+      <!-- 已選取地圖卡的快捷操作列 -->
+      <div id="selectedTileBar" class="selected-tile-bar hidden">
+        <div class="selected-tile-info">
+          <strong id="selTileTitle">起點地圖卡</strong>
+          <span id="selTileSide">前面</span>
+          <span id="selTileCoord">(1, 1)</span>
+        </div>
+        <div class="selected-tile-actions">
+          <button id="btnTileFlip" class="btn btn-sm btn-secondary">🔄 翻面（前/背）</button>
+          <button id="btnTileRotate" class="btn btn-sm btn-secondary">↪️ 旋轉 90°</button>
+          <button id="btnTileInfo" class="btn btn-sm btn-ghost">ℹ️ 說明</button>
+          <button id="btnTileRemove" class="btn btn-sm btn-danger">🗑️ 移除</button>
+        </div>
+      </div>
+
+      <!-- 地圖卡庫抽屜 -->
+      <div class="map-palette-box">
+        <div class="palette-header">
+          <div class="cat-pills" id="mapCatPills"></div>
+          <div class="map-side-switch">
+            <button id="btnPaletteSideFront" class="side-btn active">前面</button>
+            <button id="btnPaletteSideBack" class="side-btn">背面</button>
+          </div>
+        </div>
+        <div class="palette-tip">💡 可「拖曳」地圖卡到上方格子，或「點選卡片 → 再點格子」快速放置（基地卡會自動佔用相鄰 2 格）。</div>
+        <div id="mapPalette" class="map-palette"></div>
+      </div>
+    </section>
+
+    <!-- 右半邊：指令卡庫 + 多軌程式編排區 + 執行日誌 -->
+    <section class="panel coding-panel">
+      <!-- 上部：指令卡庫 -->
+      <div class="cmd-palette-section">
+        <div class="panel-header compact">
+          <div class="panel-title-group">
+            <h2>🃏 指令卡工具箱</h2>
+            <span class="hint-badge">拖曳至下方程式軌，或點擊卡片直接加入</span>
+          </div>
+          <input type="search" id="cmdSearch" class="search-input" placeholder="🔍 搜尋指令卡名稱..." />
+        </div>
+        <div class="cat-pills scrollable" id="cmdCatPills"></div>
+        <div id="cmdPalette" class="cmd-palette"></div>
+      </div>
+
+      <!-- 中部：多軌程式編排區 -->
+      <div class="program-section">
+        <div class="track-tabs-bar">
+          <div class="track-tabs" id="trackTabs">
+            <button class="track-tab active" data-track="main">🚀 主程式 <span class="badge" id="badge-main">0</span></button>
+            <button class="track-tab" data-track="func_red">🔴 紅函式 <span class="badge" id="badge-func_red">0</span></button>
+            <button class="track-tab" data-track="func_green">🟢 綠函式 <span class="badge" id="badge-func_green">0</span></button>
+            <button class="track-tab" data-track="func_blue">🔵 藍函式 <span class="badge" id="badge-func_blue">0</span></button>
+            <button class="track-tab" data-track="condition">🔀 條件 IF <span class="badge" id="badge-condition">0</span></button>
+          </div>
+          <div class="track-actions">
+            <button id="btnAutoWrap" class="btn btn-sm btn-secondary" title="自動補齊此軌道的起點卡與終點卡">✨ 補起終點</button>
+            <button id="btnValidate" class="btn btn-sm btn-ghost">✅ 檢查語法</button>
+            <button id="btnClearTrack" class="btn btn-sm btn-danger-outline">清空此軌</button>
+          </div>
+        </div>
+
+        <div class="track-rule-hint" id="trackRuleHint"></div>
+
+        <!-- 指令卡拖放排序槽 -->
+        <div id="programTrack" class="program-track" aria-label="程式指令序列"></div>
+      </div>
+
+      <!-- 下部：語法檢查與機器人執行日誌 -->
+      <div class="log-section">
+        <div class="log-header">
+          <span>📋 語法檢查與執行日誌</span>
+          <button id="btnClearLog" class="btn btn-ghost btn-xs">清除日誌</button>
+        </div>
+        <div id="validationBox" class="validation-box hidden"></div>
+        <div id="execLog" class="exec-log"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ==================== 視圖 2：指令卡完整圖鑑 (63種) ==================== -->
+  <section id="view-cmd-catalog" class="catalog-view" role="tabpanel">
+    <div class="catalog-header">
+      <div>
+        <h2>🃏 指令卡完整定義總覽（對照手冊第 9～10 頁）</h2>
+        <p>完整建置 63 種指令卡（包含主程式起終點、三色函式、IF/DO/ELSE/AND/OR 條件與四大事件、綠／紅迴圈、移動暫停、輸出齒輪、10 種音效、8 種燈光顏色、10 種燈光效果、數字卡 1-9）。點擊音效或燈光卡可直接試聽／預覽！</p>
+      </div>
+      <div class="cat-pills" id="catalogCmdCatPills"></div>
+    </div>
+    <div id="catalogCmdGrid" class="catalog-grid"></div>
+  </section>
+
+  <!-- ==================== 視圖 3：地圖卡完整圖鑑 (19張38面) ==================== -->
+  <section id="view-map-catalog" class="catalog-view" role="tabpanel">
+    <div class="catalog-header">
+      <div>
+        <h2>🗺️ 地圖卡完整概述總覽（對照手冊第 11 頁）</h2>
+        <p>完整建置四大類、19 張雙面實體地圖卡（共 38 個光學識別與場景圖面）：起點地圖卡（1張）、紅／綠／藍雙格基地卡（3張）、事件地圖卡（2張共4事件）、一般地圖卡（13張）。</p>
+      </div>
+      <div class="cat-pills" id="catalogMapCatPills"></div>
+    </div>
+    <div id="catalogMapGrid" class="map-catalog-grid"></div>
+  </section>
+
+  <!-- 卡片詳細說明彈窗 -->
+  <div id="cardModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <button class="modal-close" id="btnCloseModal" aria-label="關閉">✕</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- 模組化腳本（使用標準 script 標籤，可直接雙擊 index.html 離線開啟運作） -->
+  <script src="js/command-cards.js"></script>
+  <script src="js/map-cards.js"></script>
+  <script src="js/audio-engine.js"></script>
+  <script src="js/robot-engine.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
