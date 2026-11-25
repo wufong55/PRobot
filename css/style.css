@@ -1223,6 +1223,66 @@ button, select, input, .cat-pill, .track-tab, .dir-btn, .side-btn {
   border-style: dashed;
 }
 
+.cmd-card-tile.not-allowed {
+  opacity: 0.36;
+  filter: grayscale(0.7);
+  border-style: dashed;
+  border-color: #fca5a5;
+  background: #fef2f2;
+  cursor: not-allowed;
+}
+
+.cmd-card-tile.not-allowed:hover {
+  transform: none;
+  border-color: #ef4444;
+  box-shadow: none;
+}
+
+.card-block-tag {
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  font-size: 0.72rem;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* 浮動操作提示條（禁止加入不適用軌道或超量時即時提醒） */
+.app-toast {
+  position: fixed;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%) translateY(16px);
+  background: #1e293b;
+  color: #ffffff;
+  font-size: 0.86rem;
+  font-weight: 700;
+  padding: 10px 16px;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.32);
+  z-index: 200;
+  max-width: min(92vw, 560px);
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.app-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.app-toast.error {
+  background: #b91c1c;
+  border: 1.5px solid #fca5a5;
+}
+
+.app-toast.warn {
+  background: #b45309;
+  border: 1.5px solid #fde68a;
+}
+
 .cmd-card-tile .card-svg {
   width: 54px;
   height: 54px;
