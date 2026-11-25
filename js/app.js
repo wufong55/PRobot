@@ -199,7 +199,26 @@
     }
   }
 
-  // ==================== 日誌輔助 ====================
+  // ==================== 浮動提示與日誌輔助 ====================
+  let toastEl = null;
+  let toastTimer = null;
+
+  function showToast(msg, kind) {
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.className = 'app-toast';
+      toastEl.setAttribute('role', 'status');
+      toastEl.setAttribute('aria-live', 'polite');
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = msg;
+    toastEl.className = 'app-toast show ' + (kind || 'info');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      if (toastEl) toastEl.classList.remove('show');
+    }, 2800);
+  }
+
   function appendLog(msg, level) {
     const line = document.createElement('div');
     line.className = 'log-line ' + (level || 'info');
@@ -898,22 +917,32 @@
     });
 
     dom.cmdPalette.innerHTML = '';
+    const activeTrackLabel = Engine.TRACK_LABELS[state.activeTrack] || state.activeTrack;
     cards.forEach(card => {
       const used = usage[card.id] || 0;
       const remain = card.qty - used;
       const isDepleted = state.enforceStock && remain <= 0;
+      const isAllowedInTrack = !card.allowedIn || card.allowedIn.includes(state.activeTrack);
 
       const el = document.createElement('div');
-      el.className = 'cmd-card-tile' + (isDepleted ? ' depleted' : '');
-      el.draggable = true;
-      el.dataset.dndType = 'cmd-palette';
+      el.className = 'cmd-card-tile'
+        + (isDepleted ? ' depleted' : '')
+        + (!isAllowedInTrack ? ' not-allowed' : '');
+      el.draggable = isAllowedInTrack;
+      if (isAllowedInTrack) {
+        el.dataset.dndType = 'cmd-palette';
+      }
       el.dataset.cardId = card.id;
-      el.title = `${card.name}（套件數量：${card.qty}）\n${card.description}`;
+      const allowedNames = (card.allowedIn || []).map(t => Engine.TRACK_LABELS[t] || t).join('、');
+      el.title = !isAllowedInTrack
+        ? `🚫「${card.name}」不適用於【${activeTrackLabel}】\n僅適用於：${allowedNames}`
+        : `${card.name}（套件數量：${card.qty}）\n${card.description}`;
 
       const qtyText = state.enforceStock ? `${remain}/${card.qty}` : `×${card.qty}`;
       el.innerHTML = `
         <span class="card-qty-tag ${remain < 0 ? 'over' : ''}">${qtyText}</span>
         <button class="card-info-btn" title="檢視指令卡說明與試聽">i</button>
+        ${!isAllowedInTrack ? '<span class="card-block-tag" title="不適用於目前軌道">🚫</span>' : ''}
         ${card.svg}
         <div class="cmd-card-name">${card.shortName}</div>
       `;
@@ -924,6 +953,10 @@
       });
 
       el.addEventListener('dragstart', e => {
+        if (!isAllowedInTrack) {
+          e.preventDefault();
+          return;
+        }
         e.dataTransfer.setData('application/x-cmd-card', JSON.stringify({
           source: 'palette',
           cardId: card.id
@@ -942,34 +975,62 @@
   // ==================== 程式軌道操作與渲染 ====================
   function addCardToTrack(trackId, cardId, insertIndex) {
     const card = CmdMod.getById(cardId);
-    if (!card) return;
+    if (!card) return false;
 
-    if (state.enforceStock) {
-      const usage = getCardUsageMap();
-      if ((usage[cardId] || 0) >= card.qty) {
-        appendLog(`📦 套件數量提醒：「${card.name}」原盒裝僅有 ${card.qty} 張（可於上方切換自由模式解除限制）。`, 'warn');
-        Audio.play('error');
-        return;
-      }
+    // 1. 禁止將指令卡加入不適用的軌道
+    if (card.allowedIn && !card.allowedIn.includes(trackId)) {
+      const trackLabel = Engine.TRACK_LABELS[trackId] || trackId;
+      const allowedNames = card.allowedIn.map(t => Engine.TRACK_LABELS[t] || t).join('、');
+      const msg = `🚫「${card.name}」不適用於【${trackLabel}】（僅適用：${allowedNames}），禁止加入！`;
+      appendLog(msg, 'error');
+      showToast(msg, 'error');
+      Audio.play('error');
+      return false;
     }
 
     const list = state.programs[trackId];
+    let targetIdx;
     if (typeof insertIndex === 'number' && insertIndex >= 0 && insertIndex <= list.length) {
-      list.splice(insertIndex, 0, cardId);
-    } else {
+      targetIdx = insertIndex;
+    } else if (cardId !== 'end' && list.length > 0 && list[list.length - 1] === 'end') {
       // 貼心體驗：若軌道最後一張已經是「終點」，點擊新增指令卡時自動插入在「終點」前面！
-      if (cardId !== 'end' && list.length > 0 && list[list.length - 1] === 'end') {
-        list.splice(list.length - 1, 0, cardId);
-      } else {
-        list.push(cardId);
+      targetIdx = list.length - 1;
+    } else {
+      targetIdx = list.length;
+    }
+
+    // 2. 條件語句軌道特殊規則：前進/後退/右轉/左轉/暫停禁止放在「否則 (ELSE)」後面
+    if (trackId === 'condition' && card.forbiddenAfterElse) {
+      const elseIdx = list.indexOf('else');
+      if (elseIdx !== -1 && targetIdx > elseIdx) {
+        const msg = `🚫「${card.name}」禁止放在「否則 (ELSE)」指令卡的後面！`;
+        appendLog(msg, 'error');
+        showToast(msg, 'error');
+        Audio.play('error');
+        return false;
       }
     }
+
+    // 3. 嚴格盒裝數量檢查
+    if (state.enforceStock) {
+      const usage = getCardUsageMap();
+      if ((usage[cardId] || 0) >= card.qty) {
+        const msg = `📦 套件數量已用完：「${card.name}」原盒裝僅有 ${card.qty} 張（可於上方切換自由模式解除限制）。`;
+        appendLog(msg, 'warn');
+        showToast(msg, 'warn');
+        Audio.play('error');
+        return false;
+      }
+    }
+
+    list.splice(targetIdx, 0, cardId);
 
     Audio.play('click');
     renderProgramTrack();
     renderCmdPalette();
     runValidationPreview(false);
     saveSessionState();
+    return true;
   }
 
   function removeCardFromTrack(trackId, index) {
@@ -1851,11 +1912,12 @@
       renderCmdPalette();
     });
 
-    // 程式軌道切換
+    // 程式軌道切換（同時重新渲染指令卡工具箱以標示各卡於該軌道的適用狀態）
     $$('.track-tab').forEach(btn => {
       btn.addEventListener('click', () => {
         state.activeTrack = btn.dataset.track;
         renderProgramTrack();
+        renderCmdPalette();
       });
     });
 
