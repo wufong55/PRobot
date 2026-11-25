@@ -1,0 +1,24 @@
+{
+  "name": "兒童互動編程機器人",
+  "short_name": "編程機器人",
+  "description": "兒童互動編程機器人：指令卡拖拉編程與自由排列地圖模擬模組",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f0f5fa",
+  "theme_color": "#1e3a8a",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

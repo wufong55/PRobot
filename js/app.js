@@ -9,11 +9,15 @@
   const MapMod = global.MapCardsModule;
   const Engine = global.RobotEngine;
   const Audio = global.AudioEngine;
+  const TouchDnd = global.TouchDnd;
+
+  const STORAGE_KEY = 'kids_coding_robot_workspace_v2';
 
   // ==================== 應用程式狀態 ====================
   const state = {
     view: 'workspace', // workspace | cmd-catalog | map-catalog
     enforceStock: false,
+    mapZoom: 'auto', // 'auto' | 數值倍率 (0.75 ~ 1.5)
     // 地圖狀態
     map: {
       cols: 6,
@@ -72,6 +76,7 @@
   const $$ = sel => Array.from(document.querySelectorAll(sel));
 
   const dom = {
+    stageWrapper: $('.stage-wrapper'),
     mapGrid: $('#mapGrid'),
     colHeaders: $('#colHeaders'),
     rowHeaders: $('#rowHeaders'),
@@ -108,6 +113,68 @@
     cardModal: $('#cardModal'),
     modalBody: $('#modalBody')
   };
+
+  // ==================== 自動暫存（防止 iPad Safari 背景重載遺失進度） ====================
+  function serializeWorkspace() {
+    return {
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      initialDir: state.initialDir,
+      enforceStock: state.enforceStock,
+      map: {
+        cols: state.map.cols,
+        rows: state.map.rows,
+        corridorBox: state.map.corridorBox || null,
+        tiles: state.map.tiles.map(({ col, row, cardId, side, rotation, customLabel, customTheme, customTag, mergeDir }) => ({
+          col, row, cardId, side, rotation,
+          ...(customLabel ? { customLabel } : {}),
+          ...(customTheme ? { customTheme } : {}),
+          ...(customTag ? { customTag } : {}),
+          ...(mergeDir ? { mergeDir } : {})
+        }))
+      },
+      programs: state.programs
+    };
+  }
+
+  function saveSessionState() {
+    try {
+      global.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeWorkspace()));
+    } catch (_) {
+      // Safari 無痕模式或儲存空間受限時靜默略過
+    }
+  }
+
+  function loadSessionState() {
+    try {
+      const raw = global.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.map || !Array.isArray(parsed.map.tiles)) return false;
+
+      state.map.cols = parsed.map.cols || 6;
+      state.map.rows = parsed.map.rows || 5;
+      state.map.corridorBox = parsed.map.corridorBox || null;
+      state.map.tiles = parsed.map.tiles.map(t => Object.assign({ uid: nextUid() }, t));
+      dom.gridSizeSelect.value = `${state.map.cols}x${state.map.rows}`;
+
+      if (typeof parsed.initialDir === 'number') {
+        state.initialDir = parsed.initialDir;
+      }
+      if (typeof parsed.enforceStock === 'boolean') {
+        state.enforceStock = parsed.enforceStock;
+        dom.stockModeText.textContent = state.enforceStock ? '嚴格盒裝數量' : '自由模式';
+      }
+      if (parsed.programs) {
+        ['main', 'func_red', 'func_green', 'func_blue', 'condition'].forEach(k => {
+          state.programs[k] = Array.isArray(parsed.programs[k]) ? parsed.programs[k] : [];
+        });
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   // ==================== 日誌輔助 ====================
   function appendLog(msg, level) {
@@ -225,6 +292,7 @@
     syncRobotToStartIfIdle();
     renderMapStage();
     renderSelectedTileBar();
+    saveSessionState();
     return true;
   }
 
@@ -256,23 +324,30 @@
     Audio.play('click');
     const dirName = Engine.DIR_VECTORS[dir]?.name || '';
     appendLog(`🧭 已設定機器人初始方向為：${dirName}`);
+    saveSessionState();
   }
 
   // ==================== 渲染：地圖舞台與機器人 ====================
   function getCellMetrics() {
-    const isNarrow = window.innerWidth <= 640;
-    let size = 84;
-    let gap = 4;
-    if (state.map.cols >= 12) {
-      size = isNarrow ? 38 : 44;
-      gap = 2;
-    } else if (state.map.cols >= 7) {
-      size = isNarrow ? 50 : 72;
-      gap = 4;
+    const cols = state.map.cols;
+    const gap = cols >= 12 ? 2 : 4;
+    const wrapW = (dom.stageWrapper && dom.stageWrapper.clientWidth) ? dom.stageWrapper.clientWidth : window.innerWidth;
+    // 扣除左右內距、列標寬度(28px)與棋盤邊框(22px)
+    const availW = Math.max(260, wrapW - 76);
+    const maxCellByWidth = Math.floor((availW - (cols - 1) * gap) / cols);
+
+    let baseSize;
+    if (cols >= 12) {
+      // 16×8 自然保育區：自動符合容器寬度，並保持 36px~52px 的清晰觸控比例
+      baseSize = Math.max(36, Math.min(52, maxCellByWidth));
+    } else if (cols >= 7) {
+      baseSize = Math.max(48, Math.min(76, maxCellByWidth));
     } else {
-      size = isNarrow ? 58 : 84;
-      gap = 4;
+      baseSize = Math.max(54, Math.min(86, maxCellByWidth));
     }
+
+    const scale = state.mapZoom === 'auto' ? 1 : state.mapZoom;
+    const size = Math.max(32, Math.min(96, Math.round(baseSize * scale)));
     return { size, gap };
   }
 
@@ -370,6 +445,8 @@
         + (state.selectedTileUid === tile.uid ? ' selected' : '')
         + (tile.customTheme ? ' has-custom-zone' : '');
       el.draggable = true;
+      el.dataset.dndType = 'placed-tile';
+      el.dataset.tileUid = tile.uid;
       const customName = tile.customLabel ? ` [${tile.customLabel.replace(/\n/g, '')}]` : (tile.customTag ? ` [${tile.customTag}]` : '');
       el.title = `${Engine.formatCoord(tile.col, tile.row)} ${def.name}${customName} - ${sideDef.label}（點擊選取，拖曳可移動）`;
 
@@ -446,6 +523,7 @@
 
       el.addEventListener('click', e => {
         e.stopPropagation();
+        if (TouchDnd && TouchDnd.wasJustDragged()) return;
         if (state.pickedMapCardId) {
           // 若目前有從卡庫選取地圖卡，點在舊卡上直接替換
           placeOrMoveTile(tile.col, tile.row, state.pickedMapCardId, state.mapPaletteSide, 0, null);
@@ -579,6 +657,8 @@
       const item = document.createElement('div');
       item.className = 'map-palette-item' + (state.pickedMapCardId === card.id ? ' active-pick' : '');
       item.draggable = true;
+      item.dataset.dndType = 'map-palette';
+      item.dataset.cardId = card.id;
       item.title = `${card.name}（${sideDef.label}）— 拖曳至地圖或點選後再點格子`;
 
       item.innerHTML = `
@@ -601,6 +681,7 @@
       });
 
       item.addEventListener('click', () => {
+        if (TouchDnd && TouchDnd.wasJustDragged()) return;
         state.pickedMapCardId = (state.pickedMapCardId === card.id) ? null : card.id;
         renderMapPalette();
       });
@@ -641,6 +722,8 @@
       const el = document.createElement('div');
       el.className = 'cmd-card-tile' + (isDepleted ? ' depleted' : '');
       el.draggable = true;
+      el.dataset.dndType = 'cmd-palette';
+      el.dataset.cardId = card.id;
       el.title = `${card.name}（套件數量：${card.qty}）\n${card.description}`;
 
       const qtyText = state.enforceStock ? `${remain}/${card.qty}` : `×${card.qty}`;
@@ -664,6 +747,7 @@
       });
 
       el.addEventListener('click', () => {
+        if (TouchDnd && TouchDnd.wasJustDragged()) return;
         addCardToTrack(state.activeTrack, card.id);
       });
 
@@ -701,6 +785,7 @@
     renderProgramTrack();
     renderCmdPalette();
     runValidationPreview(false);
+    saveSessionState();
   }
 
   function removeCardFromTrack(trackId, index) {
@@ -709,6 +794,7 @@
     renderProgramTrack();
     renderCmdPalette();
     runValidationPreview(false);
+    saveSessionState();
   }
 
   function moveCardInTrack(trackId, fromIdx, toIdx) {
@@ -720,6 +806,7 @@
     Audio.play('click');
     renderProgramTrack();
     runValidationPreview(false);
+    saveSessionState();
   }
 
   function renderProgramTrack() {
@@ -760,6 +847,8 @@
       const cardEl = document.createElement('div');
       cardEl.className = 'prog-card' + (isExecuting ? ' executing' : '');
       cardEl.draggable = true;
+      cardEl.dataset.dndType = 'prog-card';
+      cardEl.dataset.trackIndex = String(idx);
       cardEl.title = `${card.name}\n拖曳可調整順序，點右上角 × 可移除`;
       cardEl.innerHTML = `
         <span class="prog-card-index">${idx + 1}</span>
@@ -991,6 +1080,7 @@
     renderProgramTrack();
     renderCmdPalette();
     runValidationPreview(false);
+    saveSessionState();
     appendLog(`🗺️ 已載入範本「${preset.name}」${includeProgram ? '（含範例程式）' : ''}。`, 'highlight');
   }
 
@@ -1241,6 +1331,22 @@
       renderMapStage();
     });
 
+    // 地圖縮放（自動／放大／縮小，方便 iPad 與不同尺寸螢幕檢視 16×8 地圖）
+    $('#btnZoomOut').addEventListener('click', () => {
+      const cur = state.mapZoom === 'auto' ? 1 : state.mapZoom;
+      state.mapZoom = Math.max(0.75, Math.round((cur - 0.15) * 100) / 100);
+      renderMapStage();
+    });
+    $('#btnZoomAuto').addEventListener('click', () => {
+      state.mapZoom = 'auto';
+      renderMapStage();
+    });
+    $('#btnZoomIn').addEventListener('click', () => {
+      const cur = state.mapZoom === 'auto' ? 1 : state.mapZoom;
+      state.mapZoom = Math.min(1.5, Math.round((cur + 0.15) * 100) / 100);
+      renderMapStage();
+    });
+
     // 清空地圖
     $('#btnClearMap').addEventListener('click', () => {
       state.map.tiles = [];
@@ -1249,6 +1355,7 @@
       resetRunner();
       renderMapStage();
       renderSelectedTileBar();
+      saveSessionState();
       appendLog('🧹 已清空地圖，請從下方拖曳「起點地圖卡」與其他地圖卡自由排布。');
     });
 
@@ -1269,6 +1376,7 @@
       Audio.play('click');
       renderMapStage();
       renderSelectedTileBar();
+      saveSessionState();
     });
 
     $('#btnTileRotate').addEventListener('click', () => {
@@ -1285,6 +1393,7 @@
       syncRobotToStartIfIdle();
       renderMapStage();
       renderSelectedTileBar();
+      saveSessionState();
     });
 
     $('#btnTileInfo').addEventListener('click', () => {
@@ -1301,6 +1410,7 @@
       resetRunner();
       renderMapStage();
       renderSelectedTileBar();
+      saveSessionState();
     });
 
     // 地圖卡庫前後面預覽切換
@@ -1376,6 +1486,7 @@
       renderProgramTrack();
       renderCmdPalette();
       runValidationPreview(false);
+      saveSessionState();
     });
 
     // 檢查語法
@@ -1397,6 +1508,7 @@
       renderProgramTrack();
       renderCmdPalette();
       runValidationPreview(false);
+      saveSessionState();
     });
 
     // 清除日誌
@@ -1424,24 +1536,7 @@
 
     // 匯出 JSON
     $('#btnExport').addEventListener('click', () => {
-      const data = {
-        version: 2,
-        exportedAt: new Date().toISOString(),
-        initialDir: state.initialDir,
-        map: {
-          cols: state.map.cols,
-          rows: state.map.rows,
-          corridorBox: state.map.corridorBox || null,
-          tiles: state.map.tiles.map(({ col, row, cardId, side, rotation, customLabel, customTheme, customTag, mergeDir }) => ({
-            col, row, cardId, side, rotation,
-            ...(customLabel ? { customLabel } : {}),
-            ...(customTheme ? { customTheme } : {}),
-            ...(customTag ? { customTag } : {}),
-            ...(mergeDir ? { mergeDir } : {})
-          }))
-        },
-        programs: state.programs
-      };
+      const data = serializeWorkspace();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1481,6 +1576,7 @@
           renderProgramTrack();
           renderCmdPalette();
           runValidationPreview(false);
+          saveSessionState();
           appendLog(`📂 成功匯入專案檔：${file.name}`, 'success');
         } catch (err) {
           Audio.play('error');
@@ -1498,9 +1594,15 @@
       if (e.key === 'Escape') closeModal();
     });
 
-    window.addEventListener('resize', () => {
-      if (state.view === 'workspace') renderMapStage();
-    });
+    let resizeTimer = null;
+    const handleViewportChange = () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (state.view === 'workspace') renderMapStage();
+      }, 90);
+    };
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('orientationchange', handleViewportChange);
   }
 
   // ==================== 初始化 ====================
@@ -1517,10 +1619,55 @@
     });
 
     bindEvents();
+
+    // 初始化 iPad / 平板觸控拖曳模組
+    if (TouchDnd) {
+      TouchDnd.init({
+        onDropMapFromPalette(cardId, col, row) {
+          placeOrMoveTile(col, row, cardId, state.mapPaletteSide, 0, null);
+        },
+        onMovePlacedTile(uid, col, row) {
+          const existing = state.map.tiles.find(t => t.uid === uid);
+          if (existing) {
+            placeOrMoveTile(col, row, existing.cardId, existing.side, existing.rotation, existing.uid);
+          }
+        },
+        onDropCmdFromPalette(cardId, insertIdx) {
+          const idx = typeof insertIdx === 'number' ? insertIdx : state.programs[state.activeTrack].length;
+          addCardToTrack(state.activeTrack, cardId, idx);
+        },
+        onMoveProgCard(fromIdx, toIdx) {
+          const idx = typeof toIdx === 'number' ? toIdx : state.programs[state.activeTrack].length;
+          moveCardInTrack(state.activeTrack, fromIdx, idx);
+        }
+      });
+
+      if (TouchDnd.isTouchDevice()) {
+        const tip = $('.palette-tip');
+        if (tip) {
+          tip.textContent = '👆 輕點地圖卡再點格子可快速放置，或「長按地圖卡／已放卡片」拖曳到指定位置！';
+        }
+      }
+    }
+
     renderMapPalette();
     renderCmdPalette();
-    loadPreset(MapMod.PRESETS[0].id, true);
-    appendLog(`👋 歡迎來到兒童互動編程機器人模組！已預載「${MapMod.PRESETS[0].name}」，可自由設定機器人初始方向（上／下／左／右）並按「▶ 執行程式」試跑！`, 'info');
+
+    // 若瀏覽器有先前自動暫存的進度則還原，否則載入預設「自然保育區」範本
+    const restored = loadSessionState();
+    if (restored) {
+      renderInitialDirPicker();
+      syncRobotToStartIfIdle();
+      renderMapStage();
+      renderSelectedTileBar();
+      renderProgramTrack();
+      renderCmdPalette();
+      runValidationPreview(false);
+      appendLog('🔄 已自動還原上次的地圖與程式進度！若要重新開始可於上方切換範本並點「載入範本」。', 'highlight');
+    } else {
+      loadPreset(MapMod.PRESETS[0].id, true);
+      appendLog(`👋 歡迎來到兒童互動編程機器人模組！已預載「${MapMod.PRESETS[0].name}」，可自由設定機器人初始方向（上／下／左／右）並按「▶ 執行程式」試跑！`, 'info');
+    }
   }
 
   document.addEventListener('DOMContentLoaded', init);

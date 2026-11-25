@@ -25,6 +25,7 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -32,15 +33,28 @@ body {
   background: var(--bg-page);
   color: var(--text-main);
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;
+}
+
+button, select, input, .cat-pill, .track-tab, .dir-btn, .side-btn {
+  touch-action: manipulation;
+}
+
+.cmd-card-tile, .prog-card, .map-palette-item, .placed-tile, .grid-cell {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* ==================== 頂部導覽列 ==================== */
 .app-header {
   background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 55%, #0284c7 100%);
   color: #ffffff;
-  padding: 10px 18px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) 10px calc(18px + env(safe-area-inset-left, 0px));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -59,14 +73,22 @@ body {
 }
 
 .brand-logo {
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   background: rgba(255, 255, 255, 0.2);
   border-radius: 12px;
   display: grid;
   place-items: center;
-  font-size: 24px;
-  box-shadow: inset 0 1px 3px rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.28), inset 0 1px 3px rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.brand-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .brand h1 {
@@ -241,16 +263,16 @@ body {
 
 .workspace-view.active {
   display: grid;
-  grid-template-columns: minmax(440px, 1.08fr) minmax(420px, 1fr);
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
   gap: 14px;
-  padding: 14px;
+  padding: 14px calc(14px + env(safe-area-inset-right, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)) calc(14px + env(safe-area-inset-left, 0px));
   flex: 1;
   align-items: start;
 }
 
 .catalog-view.active {
   display: block;
-  padding: 18px 22px 36px;
+  padding: 18px calc(22px + env(safe-area-inset-right, 0px)) calc(36px + env(safe-area-inset-bottom, 0px)) calc(22px + env(safe-area-inset-left, 0px));
   max-width: 1440px;
   width: 100%;
   margin: 0 auto;
@@ -264,6 +286,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .panel-header {
@@ -1641,18 +1664,148 @@ body {
   transition: background-color 0.2s, box-shadow 0.2s;
 }
 
-/* ==================== 響應式版面 ==================== */
-@media (max-width: 1080px) {
-  .workspace-view.active {
-    grid-template-columns: 1fr;
+/* ==================== 觸控拖曳幽靈卡片與 iPad 最佳化 ==================== */
+.zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: #f1f5f9;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.zoom-controls .btn-xs {
+  border: none;
+  background: transparent;
+  min-width: 26px;
+}
+
+.zoom-controls .btn-xs:hover {
+  background: #ffffff;
+}
+
+.touch-dnd-ghost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  transform: translate(-50%, -62%) scale(1.08);
+  opacity: 0.92;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.34) !important;
+  border: 2.5px solid #2563eb !important;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.touch-dragging-source {
+  opacity: 0.35 !important;
+}
+
+.stage-wrapper,
+.map-palette,
+.cmd-palette,
+.program-track,
+.exec-log,
+.cat-pills.scrollable {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* iPad / 平板觸控裝置專用：顯示無法 hover 觸發的刪除鈕並放大點擊區域 */
+@media (hover: none), (pointer: coarse) {
+  .prog-card-del {
+    opacity: 1;
+    width: 24px;
+    height: 24px;
+    font-size: 0.85rem;
+    top: -9px;
+    right: -8px;
+    box-shadow: 0 2px 5px rgba(220, 38, 38, 0.35);
+  }
+
+  .card-info-btn {
+    width: 22px;
+    height: 22px;
+    font-size: 0.74rem;
+  }
+
+  .btn {
+    min-height: 36px;
+  }
+
+  .btn-sm {
+    min-height: 34px;
+    padding: 6px 11px;
+  }
+
+  .btn-xs {
+    min-height: 30px;
+    padding: 4px 9px;
+  }
+
+  .cat-pill,
+  .dir-btn,
+  .side-btn,
+  .track-tab {
+    min-height: 34px;
+  }
+
+  .select-sm,
+  .search-input {
+    min-height: 34px;
+    font-size: 0.88rem;
+  }
+
+  .prog-card {
+    margin-top: 4px;
+    margin-right: 4px;
   }
 }
 
-@media (max-width: 640px) {
-  .map-grid {
-    --cell-size: 62px;
+/* ==================== 響應式版面（電腦 / iPad 橫向 / iPad 直向 / 手機） ==================== */
+/* iPad 直向 (768px ~ 1024px) 及窄螢幕：上下堆疊，讓 16×8 地圖可完整跨滿螢幕寬度 */
+@media (max-width: 1024px) {
+  .workspace-view.active {
+    grid-template-columns: 1fr;
   }
+
+  .cmd-palette {
+    max-height: 240px;
+  }
+
+  .program-track {
+    min-height: 132px;
+    max-height: 260px;
+  }
+}
+
+/* iPad 橫向 (1025px ~ 1280px)：微調左右比例與間距，避免按鈕換行過度擁擠 */
+@media (min-width: 1025px) and (max-width: 1280px) {
+  .workspace-view.active {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+    gap: 10px;
+    padding: 10px;
+  }
+
   .app-header {
-    padding: 10px 12px;
+    padding: 8px 12px;
+  }
+}
+
+@media (max-width: 680px) {
+  .app-header {
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px;
+  }
+
+  .brand h1 {
+    font-size: 1rem;
+  }
+
+  .nav-tab {
+    padding: 6px 10px;
+    font-size: 0.8rem;
+  }
+
+  .map-catalog-grid {
+    grid-template-columns: 1fr;
   }
 }

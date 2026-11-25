@@ -7,6 +7,7 @@
 
   let ctx = null;
   let muted = false;
+  let unlocked = false;
 
   function ensureContext() {
     if (muted) return null;
@@ -19,6 +20,34 @@
       ctx.resume().catch(() => {});
     }
     return ctx;
+  }
+
+  // iPadOS Safari 需於首次使用者觸控／點擊手勢內同步解鎖 AudioContext 並播放 1 sample 靜音緩衝
+  function unlockAudio() {
+    if (unlocked) return;
+    const AudioCtx = global.AudioContext || global.webkitAudioContext;
+    if (!AudioCtx) return;
+    try {
+      if (!ctx) ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(ctx.destination);
+      src.start(0);
+      unlocked = true;
+      document.removeEventListener('touchstart', unlockAudio, true);
+      document.removeEventListener('pointerdown', unlockAudio, true);
+      document.removeEventListener('click', unlockAudio, true);
+    } catch (_) {}
+  }
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('touchstart', unlockAudio, true);
+    document.addEventListener('pointerdown', unlockAudio, true);
+    document.addEventListener('click', unlockAudio, true);
   }
 
   function playTone(freq, startOffset, duration, type, volume, endFreq) {
