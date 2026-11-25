@@ -12,7 +12,7 @@
   const TouchDnd = global.TouchDnd;
   const ProgramExporter = global.ProgramExporter;
 
-  const STORAGE_KEY = 'kids_coding_robot_workspace_v3';
+  const STORAGE_KEY = 'kids_coding_robot_workspace_v4';
 
   // ==================== 應用程式狀態 ====================
   const state = {
@@ -893,6 +893,268 @@
     });
   }
 
+  // ==================== 指令卡合法放置規則引擎（從源頭禁止新增錯誤指令） ====================
+  const TRACK_START_CARD = {
+    main: 'start',
+    func_red: 'func_red',
+    func_green: 'func_green',
+    func_blue: 'func_blue',
+    condition: 'if'
+  };
+
+  function getDefaultInsertIndex(trackId, cardId) {
+    const list = state.programs[trackId] || [];
+    if (cardId !== 'end' && list.length > 0 && list[list.length - 1] === 'end') {
+      return list.length - 1;
+    }
+    return list.length;
+  }
+
+  /**
+   * 檢查將 cardId 插入 trackId 的 targetIdx 位置是否完全符合手冊規則
+   * 回傳 { ok: true } 或 { ok: false, reason: '中文原因', kind: 'error'|'warn' }
+   */
+  function checkCardPlacement(trackId, list, cardId, targetIdx) {
+    const card = CmdMod.getById(cardId);
+    if (!card) return { ok: false, reason: '找不到此指令卡。', kind: 'error' };
+
+    const trackLabel = Engine.TRACK_LABELS[trackId] || trackId;
+    const expectedStartId = TRACK_START_CARD[trackId];
+    const expectedStartCard = CmdMod.getById(expectedStartId);
+
+    // 1. 軌道適用權限
+    if (card.allowedIn && !card.allowedIn.includes(trackId)) {
+      const allowedNames = card.allowedIn.map(t => Engine.TRACK_LABELS[t] || t).join('、');
+      return {
+        ok: false,
+        reason: `🚫「${card.name}」不適用於【${trackLabel}】（僅適用：${allowedNames}）！`,
+        kind: 'error'
+      };
+    }
+
+    // 2. 起點卡規則：空軌道必須先放對應起點卡；不可重複放起點卡；不可插在起點卡之前
+    const isStartCard = cardId === expectedStartId;
+    const hasStart = list.length > 0 && list[0] === expectedStartId;
+
+    if (list.length === 0) {
+      if (!isStartCard) {
+        return {
+          ok: false,
+          reason: `🚫【${trackLabel}】開頭必須先放入「${expectedStartCard ? expectedStartCard.name : expectedStartId}」！`,
+          kind: 'error'
+        };
+      }
+      return { ok: true };
+    }
+
+    if (isStartCard) {
+      if (hasStart) {
+        return { ok: false, reason: `🚫【${trackLabel}】已經有「${card.name}」了，不能重複放置！`, kind: 'error' };
+      }
+      if (targetIdx !== 0) {
+        return { ok: false, reason: `🚫「${card.name}」只能放在程式最開頭（第 1 格）！`, kind: 'error' };
+      }
+    } else if (hasStart && targetIdx === 0) {
+      return {
+        ok: false,
+        reason: `🚫 任何指令都不能放在「${expectedStartCard ? expectedStartCard.name : '起點'}」的前面！`,
+        kind: 'error'
+      };
+    }
+
+    // 3. 終點卡規則：不可重複放終點；只能放最尾端；不可插在終點後面
+    const endIdx = list.indexOf('end');
+    if (cardId === 'end') {
+      if (endIdx !== -1) {
+        return { ok: false, reason: `🚫【${trackLabel}】已經有「終點」卡了，不能重複放置！`, kind: 'error' };
+      }
+      if (targetIdx !== list.length) {
+        return { ok: false, reason: '🚫「終點」必須放在程式最尾端！', kind: 'error' };
+      }
+    } else if (endIdx !== -1 && targetIdx > endIdx) {
+      return { ok: false, reason: '🚫 不能在「終點」指令卡的後面新增指令！', kind: 'error' };
+    }
+
+    // 4. 條件語句 (condition) 專屬結構規則
+    if (trackId === 'condition') {
+      const doIdx = list.indexOf('do');
+      const elseIdx = list.indexOf('else');
+      const isEvent = cid => cid && cid.startsWith('event_');
+      const isCondToken = cid => cid === 'and' || cid === 'or' || isEvent(cid);
+
+      // (a) 在 DO 出現之前（或插入位置 <= doIdx）屬於「條件判斷區」
+      const inCondHeader = (doIdx === -1) || (targetIdx <= doIdx);
+      if (inCondHeader) {
+        const headerEnd = doIdx === -1 ? (endIdx === -1 ? list.length : endIdx) : doIdx;
+        const header = list.slice(1, headerEnd);
+
+        if (cardId === 'do') {
+          if (doIdx !== -1) {
+            return { ok: false, reason: '🚫 條件語句不能放置兩張「執行 (DO)」卡！', kind: 'error' };
+          }
+          const validCond =
+            (header.length === 1 && isEvent(header[0])) ||
+            (header.length === 3 && isEvent(header[0]) && (header[1] === 'and' || header[1] === 'or') && isEvent(header[2]));
+          if (!validCond || targetIdx !== 1 + header.length) {
+            return { ok: false, reason: '🚫 請先在「如果 (IF)」後面放入事件卡（或「事件 + 以及/或者 + 事件」），再放「執行 (DO)」！', kind: 'error' };
+          }
+        } else if (isEvent(cardId)) {
+          const prevId = list[targetIdx - 1];
+          const nextId = list[targetIdx];
+          if (prevId !== 'if' && prevId !== 'and' && prevId !== 'or') {
+            return { ok: false, reason: '🚫 事件卡只能緊接在「如果 (IF)」、「以及 (AND)」或「或者 (OR)」的後面！', kind: 'error' };
+          }
+          if (isEvent(nextId)) {
+            return { ok: false, reason: '🚫 兩張事件卡之間必須放入「以及 (AND)」或「或者 (OR)」！', kind: 'error' };
+          }
+          if (header.filter(isEvent).length >= 2) {
+            return { ok: false, reason: '🚫 條件語句最多只能組合兩個事件條件！', kind: 'error' };
+          }
+        } else if (cardId === 'and' || cardId === 'or') {
+          if (header.includes('and') || header.includes('or')) {
+            return { ok: false, reason: '🚫 條件語句中只能放置一張「以及 (AND)」或「或者 (OR)」！', kind: 'error' };
+          }
+          if (!(header.length === 1 && isEvent(header[0]) && targetIdx === 2)) {
+            return { ok: false, reason: '🚫「以及 (AND)」與「或者 (OR)」必須緊接在第 1 張事件卡後面！', kind: 'error' };
+          }
+        } else {
+          return {
+            ok: false,
+            reason: '🚫 請先完成「如果 (IF) → 事件 → 執行 (DO)」條件區，才能在「執行 (DO)」後面放入動作指令！',
+            kind: 'error'
+          };
+        }
+      } else {
+        // (b) 已在 DO 之後（DO 主體或 ELSE 主體）
+        if (cardId === 'do' || isCondToken(cardId)) {
+          return { ok: false, reason: `🚫「${card.name}」只能放在「如果 (IF)」與「執行 (DO)」之間的條件區！`, kind: 'error' };
+        }
+        if (cardId === 'else') {
+          if (elseIdx !== -1) {
+            return { ok: false, reason: '🚫 條件語句不能放置兩張「否則 (ELSE)」卡！', kind: 'error' };
+          }
+        }
+        // 在 ELSE 之後不可放置前進/後退/右轉/左轉/暫停
+        if (elseIdx !== -1 && targetIdx > elseIdx && card.forbiddenAfterElse) {
+          return { ok: false, reason: `🚫「${card.name}」禁止放在「否則 (ELSE)」指令卡的後面！`, kind: 'error' };
+        }
+        // 若正要插入 ELSE，檢查它後方（終點前）是否已有 forbiddenAfterElse 指令
+        if (cardId === 'else') {
+          const tailEnd = endIdx === -1 ? list.length : endIdx;
+          for (let i = targetIdx; i < tailEnd; i++) {
+            const c = CmdMod.getById(list[i]);
+            if (c && c.forbiddenAfterElse) {
+              return { ok: false, reason: `🚫「否則 (ELSE)」後方已有「${c.name}」（移動與暫停卡不可放在否則後面）！`, kind: 'error' };
+            }
+          }
+        }
+      }
+    }
+
+    // 5. 數字卡 1-9 規則（不可連續放置、前方必須是支援重複次數的指令）
+    const prevCard = targetIdx > 0 ? CmdMod.getById(list[targetIdx - 1]) : null;
+    const nextCard = targetIdx < list.length ? CmdMod.getById(list[targetIdx]) : null;
+
+    if (card.category === 'number') {
+      if (!prevCard) {
+        return { ok: false, reason: `🚫「${card.name}」不能放在最開頭！`, kind: 'error' };
+      }
+      if (prevCard.category === 'number') {
+        return { ok: false, reason: '🚫 禁止連續放置多張數字卡！每個指令後方只能放 1 張數字卡。', kind: 'error' };
+      }
+      if (!prevCard.acceptsNumber) {
+        return {
+          ok: false,
+          reason: `🚫「${card.name}」不能接在「${prevCard.name}」後面（僅能接在移動、轉向、暫停、齒輪、音效、燈光或迴圈起點卡後）！`,
+          kind: 'error'
+        };
+      }
+      if (nextCard && nextCard.category === 'number') {
+        return { ok: false, reason: '🚫 禁止連續放置多張數字卡！', kind: 'error' };
+      }
+    } else if (nextCard && nextCard.category === 'number' && !card.acceptsNumber) {
+      // 防止將不支援數字卡的指令硬插在某張數字卡前面
+      return {
+        ok: false,
+        reason: `🚫 不能將「${card.name}」插入在「${nextCard.name}」前面（該指令不支援數字卡）！`,
+        kind: 'error'
+      };
+    }
+
+    // 6. 簡單迴圈配對檢查（不允許在沒有對應同色未閉合起點時放入迴圈終點）
+    if (card.loopRole === 'end') {
+      const stack = [];
+      for (let i = 0; i < targetIdx; i++) {
+        const c = CmdMod.getById(list[i]);
+        if (!c) continue;
+        if (c.loopRole === 'start') stack.push(c.loopColor);
+        else if (c.loopRole === 'end' && stack.length > 0 && stack[stack.length - 1] === c.loopColor) {
+          stack.pop();
+        }
+      }
+      if (stack.length === 0 || stack[stack.length - 1] !== card.loopColor) {
+        const colName = card.loopColor === 'green' ? '綠色' : '紅色';
+        return {
+          ok: false,
+          reason: `🚫 請先放入對應的「${colName}簡單迴圈起點卡」，才能放置「${card.name}」！`,
+          kind: 'error'
+        };
+      }
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * 檢查整條候選序列在拖曳重排後是否仍然完全合法（禁止把卡片拖到錯誤位置）
+   */
+  function validateSequenceForReorder(trackId, seq) {
+    const expectedStart = TRACK_START_CARD[trackId];
+    if (seq.length === 0) return { ok: true };
+    if (seq[0] !== expectedStart) {
+      const sName = CmdMod.getById(expectedStart)?.name || expectedStart;
+      return { ok: false, reason: `🚫「${sName}」必須保持在第 1 格！` };
+    }
+    const endIdx = seq.indexOf('end');
+    if (endIdx !== -1 && endIdx !== seq.length - 1) {
+      return { ok: false, reason: '🚫「終點」必須保持在程式最尾端！' };
+    }
+
+    const doIdx = seq.indexOf('do');
+    const elseIdx = seq.indexOf('else');
+    const isEvent = cid => cid && cid.startsWith('event_');
+
+    for (let i = 0; i < seq.length; i++) {
+      const c = CmdMod.getById(seq[i]);
+      if (!c) continue;
+      if (c.category === 'number') {
+        const prev = i > 0 ? CmdMod.getById(seq[i - 1]) : null;
+        if (!prev || prev.category === 'number' || !prev.acceptsNumber) {
+          return { ok: false, reason: `🚫 移動後「${c.name}」無法接在「${prev ? prev.name : '開頭'}」後面！` };
+        }
+      }
+      if (trackId === 'condition') {
+        if (elseIdx !== -1 && i > elseIdx && c.forbiddenAfterElse) {
+          return { ok: false, reason: `🚫「${c.name}」禁止移動到「否則 (ELSE)」後面！` };
+        }
+        if (doIdx !== -1 && i > doIdx && (isEvent(seq[i]) || seq[i] === 'and' || seq[i] === 'or')) {
+          return { ok: false, reason: `🚫「${c.name}」只能留在「如果 (IF)」與「執行 (DO)」之間！` };
+        }
+        if (doIdx !== -1 && i > 0 && i < doIdx && !(isEvent(seq[i]) || seq[i] === 'and' || seq[i] === 'or')) {
+          return { ok: false, reason: `🚫「${c.name}」不能移動到「執行 (DO)」前面的條件區！` };
+        }
+      }
+    }
+    return { ok: true };
+  }
+
+  function hasAnyValidSlotInTrack(trackId, list, cardId) {
+    for (let i = 0; i <= list.length; i++) {
+      if (checkCardPlacement(trackId, list, cardId, i).ok) return true;
+    }
+    return false;
+  }
+
   // ==================== 渲染：指令卡工具箱 ====================
   function renderCmdPalette() {
     dom.cmdCatPills.innerHTML = '';
@@ -917,32 +1179,40 @@
     });
 
     dom.cmdPalette.innerHTML = '';
-    const activeTrackLabel = Engine.TRACK_LABELS[state.activeTrack] || state.activeTrack;
+    const activeList = state.programs[state.activeTrack] || [];
+
     cards.forEach(card => {
       const used = usage[card.id] || 0;
       const remain = card.qty - used;
       const isDepleted = state.enforceStock && remain <= 0;
-      const isAllowedInTrack = !card.allowedIn || card.allowedIn.includes(state.activeTrack);
+
+      const defaultIdx = getDefaultInsertIndex(state.activeTrack, card.id);
+      const defaultCheck = checkCardPlacement(state.activeTrack, activeList, card.id, defaultIdx);
+      const canPlaceSomewhere = defaultCheck.ok || (
+        (!card.allowedIn || card.allowedIn.includes(state.activeTrack)) &&
+        hasAnyValidSlotInTrack(state.activeTrack, activeList, card.id)
+      );
+      const isBlocked = !canPlaceSomewhere;
+      const canDrag = !isBlocked && !isDepleted;
 
       const el = document.createElement('div');
       el.className = 'cmd-card-tile'
         + (isDepleted ? ' depleted' : '')
-        + (!isAllowedInTrack ? ' not-allowed' : '');
-      el.draggable = isAllowedInTrack;
-      if (isAllowedInTrack) {
+        + (isBlocked ? ' not-allowed' : '');
+      el.draggable = canDrag;
+      if (canDrag) {
         el.dataset.dndType = 'cmd-palette';
       }
       el.dataset.cardId = card.id;
-      const allowedNames = (card.allowedIn || []).map(t => Engine.TRACK_LABELS[t] || t).join('、');
-      el.title = !isAllowedInTrack
-        ? `🚫「${card.name}」不適用於【${activeTrackLabel}】\n僅適用於：${allowedNames}`
+      el.title = isBlocked
+        ? `${defaultCheck.reason}`
         : `${card.name}（套件數量：${card.qty}）\n${card.description}`;
 
       const qtyText = state.enforceStock ? `${remain}/${card.qty}` : `×${card.qty}`;
       el.innerHTML = `
         <span class="card-qty-tag ${remain < 0 ? 'over' : ''}">${qtyText}</span>
         <button class="card-info-btn" title="檢視指令卡說明與試聽">i</button>
-        ${!isAllowedInTrack ? '<span class="card-block-tag" title="不適用於目前軌道">🚫</span>' : ''}
+        ${isBlocked ? '<span class="card-block-tag" title="目前無法加入此軌道">🚫</span>' : ''}
         ${card.svg}
         <div class="cmd-card-name">${card.shortName}</div>
       `;
@@ -953,7 +1223,7 @@
       });
 
       el.addEventListener('dragstart', e => {
-        if (!isAllowedInTrack) {
+        if (!canDrag) {
           e.preventDefault();
           return;
         }
@@ -977,46 +1247,27 @@
     const card = CmdMod.getById(cardId);
     if (!card) return false;
 
-    // 1. 禁止將指令卡加入不適用的軌道
-    if (card.allowedIn && !card.allowedIn.includes(trackId)) {
-      const trackLabel = Engine.TRACK_LABELS[trackId] || trackId;
-      const allowedNames = card.allowedIn.map(t => Engine.TRACK_LABELS[t] || t).join('、');
-      const msg = `🚫「${card.name}」不適用於【${trackLabel}】（僅適用：${allowedNames}），禁止加入！`;
-      appendLog(msg, 'error');
-      showToast(msg, 'error');
-      Audio.play('error');
-      return false;
-    }
-
     const list = state.programs[trackId];
     let targetIdx;
     if (typeof insertIndex === 'number' && insertIndex >= 0 && insertIndex <= list.length) {
       targetIdx = insertIndex;
-    } else if (cardId !== 'end' && list.length > 0 && list[list.length - 1] === 'end') {
-      // 貼心體驗：若軌道最後一張已經是「終點」，點擊新增指令卡時自動插入在「終點」前面！
-      targetIdx = list.length - 1;
     } else {
-      targetIdx = list.length;
+      targetIdx = getDefaultInsertIndex(trackId, cardId);
     }
 
-    // 2. 條件語句軌道特殊規則：前進/後退/右轉/左轉/暫停禁止放在「否則 (ELSE)」後面
-    if (trackId === 'condition' && card.forbiddenAfterElse) {
-      const elseIdx = list.indexOf('else');
-      if (elseIdx !== -1 && targetIdx > elseIdx) {
-        const msg = `🚫「${card.name}」禁止放在「否則 (ELSE)」指令卡的後面！`;
-        appendLog(msg, 'error');
-        showToast(msg, 'error');
-        Audio.play('error');
-        return false;
-      }
+    // 1. 完整規則驗證：不合法的指令直接禁止新增進軌道！
+    const placement = checkCardPlacement(trackId, list, cardId, targetIdx);
+    if (!placement.ok) {
+      showToast(placement.reason, placement.kind || 'error');
+      Audio.play('error');
+      return false;
     }
 
-    // 3. 嚴格盒裝數量檢查
+    // 2. 嚴格盒裝數量檢查
     if (state.enforceStock) {
       const usage = getCardUsageMap();
       if ((usage[cardId] || 0) >= card.qty) {
         const msg = `📦 套件數量已用完：「${card.name}」原盒裝僅有 ${card.qty} 張（可於上方切換自由模式解除限制）。`;
-        appendLog(msg, 'warn');
         showToast(msg, 'warn');
         Audio.play('error');
         return false;
@@ -1045,11 +1296,23 @@
   function moveCardInTrack(trackId, fromIdx, toIdx) {
     const list = state.programs[trackId];
     if (fromIdx < 0 || fromIdx >= list.length || fromIdx === toIdx) return;
-    const [item] = list.splice(fromIdx, 1);
+
+    const candidate = list.slice();
+    const [item] = candidate.splice(fromIdx, 1);
     const adjusted = toIdx > fromIdx ? toIdx - 1 : toIdx;
-    list.splice(adjusted, 0, item);
+    candidate.splice(adjusted, 0, item);
+
+    const check = validateSequenceForReorder(trackId, candidate);
+    if (!check.ok) {
+      showToast(check.reason, 'error');
+      Audio.play('error');
+      return;
+    }
+
+    state.programs[trackId] = candidate;
     Audio.play('click');
     renderProgramTrack();
+    renderCmdPalette();
     runValidationPreview(false);
     saveSessionState();
   }

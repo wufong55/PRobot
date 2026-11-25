@@ -869,11 +869,11 @@
       corridorBox: { colStart: 2, colEnd: 13, rowStart: 2, rowEnd: 5 },
       tiles: buildNatureReserveTiles(),
       sampleProgram: {
-        // 從 H8 面向「上」出發 → 左轉走至 E8 → 右轉向上走至 E4 → 右轉向右進入 F4(紅基地星星格，方向一致) → 自動進 G4 執行紅函式 → 自動退回 F4 繼續主程式 → 歡呼結束
+        // 主程式範例（各函式與條件軌道預設為空，讓學生自行編寫）
         main: ['start', 'turn_left', 'forward', 'num_3', 'turn_right', 'forward', 'num_4', 'turn_right', 'forward', 'sound_cheer', 'end'],
-        func_red: ['func_red', 'light_red', 'gear_cw', 'num_2', 'sound_firehose', 'end'],
-        func_green: ['func_green', 'light_green', 'gear_ccw', 'num_2', 'sound_hi', 'end'],
-        func_blue: ['func_blue', 'light_blue', 'gear_cw', 'num_3', 'sound_siren', 'end'],
+        func_red: [],
+        func_green: [],
+        func_blue: [],
         condition: []
       }
     },
@@ -897,10 +897,10 @@
       ],
       sampleProgram: {
         main: ['start', 'forward', 'num_4', 'sound_cheer', 'end'],
-        func_red: ['func_red', 'light_red', 'gear_cw', 'num_2', 'sound_factory', 'end'],
-        func_green: ['func_green', 'light_green', 'gear_ccw', 'num_2', 'end'],
-        func_blue: ['func_blue', 'fx_disco', 'sound_penguin', 'end'],
-        condition: ['if', 'event_2', 'do', 'light_yellow', 'sound_hi', 'else', 'sound_huh', 'end']
+        func_red: [],
+        func_green: [],
+        func_blue: [],
+        condition: []
       }
     },
     {
@@ -924,7 +924,7 @@
         func_red: [],
         func_green: [],
         func_blue: [],
-        condition: ['if', 'event_1', 'and', 'event_2', 'do', 'light_rainbow', 'sound_cheer', 'else', 'light_purple', 'sound_ah', 'end']
+        condition: []
       }
     },
     {
@@ -945,8 +945,8 @@
       ],
       sampleProgram: {
         main: ['start', 'loop_green_start', 'num_2', 'forward', 'num_2', 'turn_right', 'loop_green_end', 'sound_cheer', 'end'],
-        func_red: ['func_red', 'light_red', 'gear_cw', 'sound_firehose', 'end'],
-        func_green: ['func_green', 'fx_emergency', 'gear_ccw', 'sound_siren', 'end'],
+        func_red: [],
+        func_green: [],
         func_blue: [],
         condition: []
       }
