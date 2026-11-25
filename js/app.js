@@ -10,13 +10,17 @@
   const Engine = global.RobotEngine;
   const Audio = global.AudioEngine;
   const TouchDnd = global.TouchDnd;
+  const ProgramExporter = global.ProgramExporter;
 
-  const STORAGE_KEY = 'kids_coding_robot_workspace_v2';
+  const STORAGE_KEY = 'kids_coding_robot_workspace_v3';
 
   // ==================== 應用程式狀態 ====================
   const state = {
     view: 'workspace', // workspace | cmd-catalog | map-catalog
-    enforceStock: false,
+    focusMode: false, // 專注瀏覽模式（只顯示地圖與全部程式集）
+    enforceStock: true, // 預設為嚴格盒裝數量
+    showTrail: true, // 是否顯示機器人執行時的移動軌跡路線
+    trailPoints: [], // [{ col, row, kind: 'start'|'move'|'base_in'|'base_out' }]
     mapZoom: 'auto', // 'auto' | 數值倍率 (0.75 ~ 1.5)
     // 地圖狀態
     map: {
@@ -26,6 +30,8 @@
       tiles: [] // { uid, col, row, cardId, side: 'front'|'back', rotation: 0|90|180|270, customLabel?, customTheme?, customTag?, mergeDir? }
     },
     initialDir: 3, // 機器人初始方向：0=右, 1=下, 2=左, 3=上
+    startPos: null, // 機器人自訂起始位置：{ col, row } 或 null（跟隨起點地圖卡）
+    pickingStartPos: false, // 是否正處於「點選地圖設定起點」模式
     mapCat: 'all',
     mapPaletteSide: 'front',
     pickedMapCardId: null,
@@ -65,9 +71,9 @@
 
   const TRACK_HINTS = {
     main: '🚀 主程式：必須以「起點」開頭、「終點」結尾。可使用移動、轉向、暫停、迴圈、音效、燈光與數字卡；不可放輸出齒輪卡。',
-    func_red: '🔴 紅色函式：必須以「紅色函式起點卡」開頭、「終點」結尾。踩到紅色基地卡（紅星）時觸發，可使用輸出齒輪、轉向、音效、燈光與迴圈。',
-    func_green: '🟢 綠色函式：必須以「綠色函式起點卡」開頭、「終點」結尾。踩到綠色基地卡（綠星）時觸發，執行完自動回到基地卡繼續主程式。',
-    func_blue: '🔵 藍色函式：必須以「藍色函式起點卡」開頭、「終點」結尾。踩到藍色基地卡（藍星）時觸發，執行完自動回到基地卡繼續主程式。',
+    func_red: '🔴 紅色函式：必須以「紅色函式起點卡」開頭、「終點」結尾。機器人面向與紅基地箭頭一致進入紅星格時，自動前進一步進基地並執行，結束後自動退回紅星格繼續主程式。',
+    func_green: '🟢 綠色函式：必須以「綠色函式起點卡」開頭、「終點」結尾。機器人面向與綠基地箭頭一致進入綠星格時，自動前進一步進基地並執行，結束後自動退回綠星格繼續主程式。',
+    func_blue: '🔵 藍色函式：必須以「藍色函式起點卡」開頭、「終點」結尾。機器人面向與藍基地箭頭一致進入藍星格時，自動前進一步進基地並執行，結束後自動退回藍星格繼續主程式。',
     condition: '🔀 條件語句：結構為「如果(IF) → 事件卡 [以及/或者 事件卡] → 執行(DO) → 指令 [否則(ELSE) → 指令] → 終點」。注意：前進/後退/轉向/暫停不可放在「否則」後面！'
   };
 
@@ -80,6 +86,8 @@
     mapGrid: $('#mapGrid'),
     colHeaders: $('#colHeaders'),
     rowHeaders: $('#rowHeaders'),
+    btnPickStartPos: $('#btnPickStartPos'),
+    startPosCoordText: $('#startPosCoordText'),
     initialDirPicker: $('#initialDirPicker'),
     mapCatPills: $('#mapCatPills'),
     mapPalette: $('#mapPalette'),
@@ -95,6 +103,8 @@
     trackTabs: $('#trackTabs'),
     trackRuleHint: $('#trackRuleHint'),
     programTrack: $('#programTrack'),
+    focusProgramsList: $('#focusProgramsList'),
+    btnFocusMode: $('#btnFocusMode'),
     validationBox: $('#validationBox'),
     execLog: $('#execLog'),
     robotStatusPill: $('#robotStatusPill'),
@@ -106,6 +116,8 @@
     btnMute: $('#btnMute'),
     btnToggleStock: $('#btnToggleStock'),
     stockModeText: $('#stockModeText'),
+    btnToggleTrail: $('#btnToggleTrail'),
+    trailStateText: $('#trailStateText'),
     catalogCmdCatPills: $('#catalogCmdCatPills'),
     catalogCmdGrid: $('#catalogCmdGrid'),
     catalogMapCatPills: $('#catalogMapCatPills'),
@@ -117,10 +129,12 @@
   // ==================== 自動暫存（防止 iPad Safari 背景重載遺失進度） ====================
   function serializeWorkspace() {
     return {
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
       initialDir: state.initialDir,
+      startPos: state.startPos ? { col: state.startPos.col, row: state.startPos.row } : null,
       enforceStock: state.enforceStock,
+      showTrail: state.showTrail,
       map: {
         cols: state.map.cols,
         rows: state.map.rows,
@@ -161,10 +175,19 @@
       if (typeof parsed.initialDir === 'number') {
         state.initialDir = parsed.initialDir;
       }
+      if (parsed.startPos && typeof parsed.startPos.col === 'number' && typeof parsed.startPos.row === 'number') {
+        state.startPos = { col: parsed.startPos.col, row: parsed.startPos.row };
+      } else {
+        state.startPos = null;
+      }
       if (typeof parsed.enforceStock === 'boolean') {
         state.enforceStock = parsed.enforceStock;
-        dom.stockModeText.textContent = state.enforceStock ? '嚴格盒裝數量' : '自由模式';
       }
+      dom.stockModeText.textContent = state.enforceStock ? '嚴格盒裝數量' : '自由模式';
+      if (typeof parsed.showTrail === 'boolean') {
+        state.showTrail = parsed.showTrail;
+      }
+      renderTrailToggle();
       if (parsed.programs) {
         ['main', 'func_red', 'func_green', 'func_blue', 'condition'].forEach(k => {
           state.programs[k] = Array.isArray(parsed.programs[k]) ? parsed.programs[k] : [];
@@ -296,12 +319,63 @@
     return true;
   }
 
-  function syncRobotToStartIfIdle() {
-    if (state.runner && state.runner.isRunning()) return;
+  function getEffectiveStartPos() {
+    if (
+      state.startPos &&
+      Engine.getCellInfo(state.map, state.startPos.col, state.startPos.row)
+    ) {
+      return { col: state.startPos.col, row: state.startPos.row };
+    }
     const startTile = Engine.findStartTile(state.map);
     if (startTile) {
-      state.robotVisual.col = startTile.col;
-      state.robotVisual.row = startTile.row;
+      return { col: startTile.col, row: startTile.row };
+    }
+    return null;
+  }
+
+  function renderStartPosControl() {
+    if (!dom.btnPickStartPos) return;
+    const pos = getEffectiveStartPos();
+    const coordLabel = pos ? Engine.formatCoord(pos.col, pos.row) : '未設定';
+    dom.btnPickStartPos.classList.toggle('picking', state.pickingStartPos);
+    if (state.pickingStartPos) {
+      dom.btnPickStartPos.innerHTML = `📍 請點選地圖任一格…（再點取消）`;
+    } else {
+      dom.btnPickStartPos.innerHTML = `📍 起點：<span id="startPosCoordText">${coordLabel}</span>（點擊調整）`;
+    }
+    if (dom.mapGrid) {
+      dom.mapGrid.classList.toggle('picking-start', state.pickingStartPos);
+    }
+  }
+
+  function setCustomStartPos(col, row) {
+    if (!Engine.getCellInfo(state.map, col, row)) {
+      Audio.play('error');
+      appendLog(`⚠️ ${Engine.formatCoord(col, row)} 尚未放置地圖卡，請選擇有地圖卡的格子作為起始位置！`, 'warn');
+      return false;
+    }
+    state.startPos = { col, row };
+    state.pickingStartPos = false;
+    Audio.play('scan');
+    if (!state.runner || !state.runner.isRunning()) {
+      state.robotVisual.col = col;
+      state.robotVisual.row = row;
+      state.robotVisual.dir = state.initialDir;
+    }
+    renderStartPosControl();
+    renderRobotLayer();
+    saveSessionState();
+    appendLog(`📍 已將機器人起始位置調整至 ${Engine.formatCoord(col, row)}！`, 'highlight');
+    return true;
+  }
+
+  function syncRobotToStartIfIdle() {
+    renderStartPosControl();
+    if (state.runner && state.runner.isRunning()) return;
+    const pos = getEffectiveStartPos();
+    if (pos) {
+      state.robotVisual.col = pos.col;
+      state.robotVisual.row = pos.row;
       state.robotVisual.dir = state.initialDir;
     }
   }
@@ -360,6 +434,7 @@
     dom.mapGrid.style.setProperty('--cell-size', size + 'px');
     dom.mapGrid.style.setProperty('--cell-gap', gap + 'px');
     dom.mapGrid.classList.toggle('compact-grid', cols >= 12);
+    dom.mapGrid.classList.toggle('picking-start', state.pickingStartPos);
     dom.mapGrid.innerHTML = '';
 
     // 渲染上方 A~P 欄標與左側 1~8 列標
@@ -421,6 +496,10 @@
         });
 
         cell.addEventListener('click', () => {
+          if (state.pickingStartPos) {
+            setCustomStartPos(c, r);
+            return;
+          }
           if (state.pickedMapCardId) {
             placeOrMoveTile(c, r, state.pickedMapCardId, state.mapPaletteSide, 0, null);
           } else {
@@ -550,14 +629,119 @@
       dom.mapGrid.appendChild(box);
     }
 
-    // 3. 繪製機器人覆蓋層
+    // 3. 繪製移動軌跡層與機器人覆蓋層
+    renderTrailLayer();
     renderRobotLayer();
+  }
+
+  function renderTrailToggle() {
+    if (!dom.btnToggleTrail) return;
+    dom.btnToggleTrail.classList.toggle('active', state.showTrail);
+    if (dom.trailStateText) {
+      dom.trailStateText.textContent = state.showTrail ? '開' : '關';
+    }
+  }
+
+  function renderTrailLayer() {
+    let svg = dom.mapGrid.querySelector('.trail-svg-layer');
+    if (!state.showTrail || !state.trailPoints || state.trailPoints.length < 1) {
+      if (svg) svg.remove();
+      return;
+    }
+
+    const { size, gap } = getCellMetrics();
+    const step = size + gap;
+    const pad = 8;
+    const totalW = pad * 2 + state.map.cols * size + (state.map.cols - 1) * gap;
+    const totalH = pad * 2 + state.map.rows * size + (state.map.rows - 1) * gap;
+
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'trail-svg-layer');
+      dom.mapGrid.appendChild(svg);
+    }
+
+    svg.setAttribute('viewBox', `0 0 ${totalW} ${totalH}`);
+
+    const cx = col => pad + col * step + size / 2;
+    const cy = row => pad + row * step + size / 2;
+
+    const parts = [];
+    const pts = state.trailPoints;
+    const strokeW = Math.max(3, Math.round(size * 0.095));
+
+    // 繪製每一段移動線段與方向箭頭
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1];
+      const b = pts[i];
+      let x1 = cx(a.col);
+      let y1 = cy(a.row);
+      let x2 = cx(b.col);
+      let y2 = cy(b.row);
+
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) continue;
+
+      const isBase = b.kind === 'base_in' || b.kind === 'base_out';
+      // 進基地與退回基地略微錯開，讓往返雙線都清晰可見
+      if (isBase) {
+        const nx = -dy / len;
+        const ny = dx / len;
+        const offset = b.kind === 'base_in' ? 3.5 : -3.5;
+        x1 += nx * offset;
+        y1 += ny * offset;
+        x2 += nx * offset;
+        y2 += ny * offset;
+      }
+
+      const color = isBase ? '#f59e0b' : '#2563eb';
+      const dash = isBase ? 'stroke-dasharray="5 3.5"' : '';
+
+      // 白色外描邊讓軌跡在任何深淺地圖卡上都清晰醒目
+      parts.push(
+        `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="rgba(255,255,255,0.85)" stroke-width="${strokeW + 2.5}" stroke-linecap="round"/>`
+      );
+      parts.push(
+        `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="${strokeW}" stroke-linecap="round" ${dash} opacity="0.9"/>`
+      );
+
+      // 線段中點方向小箭頭
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
+      const ah = Math.max(4.5, strokeW * 1.15);
+      parts.push(
+        `<polygon points="${ah},0 ${-ah * 0.75},${-ah * 0.72} ${-ah * 0.75},${ah * 0.72}" fill="${color}" stroke="#ffffff" stroke-width="1" transform="translate(${mx.toFixed(1)},${my.toFixed(1)}) rotate(${angle.toFixed(1)})"/>`
+      );
+    }
+
+    // 繪製節點圓點（起點為醒目綠色圓圈，其餘為路徑節點）
+    pts.forEach((p, idx) => {
+      const px = cx(p.col);
+      const py = cy(p.row);
+      if (idx === 0) {
+        const r = Math.max(5, Math.round(size * 0.14));
+        parts.push(
+          `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${r}" fill="#16a34a" stroke="#ffffff" stroke-width="2.2"/>`
+        );
+      } else {
+        const r = Math.max(3, Math.round(size * 0.08));
+        const fill = (p.kind === 'base_in' || p.kind === 'base_out') ? '#f59e0b' : '#2563eb';
+        parts.push(
+          `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${r}" fill="${fill}" stroke="#ffffff" stroke-width="1.5"/>`
+        );
+      }
+    });
+
+    svg.innerHTML = parts.join('');
   }
 
   function renderRobotLayer() {
     let layer = dom.mapGrid.querySelector('.robot-layer');
-    const startTile = Engine.findStartTile(state.map);
-    if (!startTile) {
+    const startPos = getEffectiveStartPos();
+    if (!startPos) {
       if (layer) layer.remove();
       return;
     }
@@ -830,6 +1014,7 @@
       empty.className = 'track-empty';
       empty.innerHTML = `將上方指令卡<strong>拖曳到這裡</strong>，或直接<strong>點擊指令卡</strong>加入「${Engine.TRACK_LABELS[state.activeTrack]}」<br/><small>也可以點右上角「✨ 補起終點」快速建立架構</small>`;
       dom.programTrack.appendChild(empty);
+      renderFocusPrograms();
       return;
     }
 
@@ -908,6 +1093,172 @@
 
       dom.programTrack.appendChild(slot);
     });
+
+    renderFocusPrograms();
+  }
+
+  // ==================== 專注瀏覽模式：一次渲染主程式與所有函式 ====================
+  function renderFocusPrograms() {
+    if (!dom.focusProgramsList || !ProgramExporter) return;
+    dom.focusProgramsList.innerHTML = '';
+
+    const activeTracks = ProgramExporter.TRACK_META
+      .map(meta => ({ meta, ids: state.programs[meta.id] || [] }))
+      .filter(t => t.ids.length > 0);
+
+    if (activeTracks.length === 0) {
+      dom.focusProgramsList.innerHTML = `<div class="track-empty">目前尚未編寫任何指令卡，請點右上角「✏️ 返回編輯」加入指令卡。</div>`;
+      return;
+    }
+
+    let activeChipEl = null;
+
+    activeTracks.forEach(({ meta, ids }) => {
+      const cardBox = document.createElement('div');
+      cardBox.className = 'focus-track-card';
+      cardBox.style.borderColor = meta.border;
+
+      const head = document.createElement('div');
+      head.className = 'focus-track-head';
+      head.style.background = meta.bg;
+      head.style.color = meta.accent;
+      head.innerHTML = `<span>${meta.title}</span><span class="qty-pill" style="background:${meta.accent};color:#fff;">${ids.length} 張</span>`;
+      cardBox.appendChild(head);
+
+      const seq = document.createElement('div');
+      seq.className = 'focus-track-seq';
+
+      ids.forEach((cid, idx) => {
+        const card = CmdMod.getById(cid);
+        if (!card) return;
+        const isExec =
+          state.highlight.trackId === meta.id &&
+          (state.highlight.cardIndex === idx || state.highlight.numIndex === idx);
+
+        const chip = document.createElement('div');
+        chip.className = 'focus-card-chip' + (isExec ? ' executing' : '');
+        chip.title = `${card.name}`;
+        chip.innerHTML = `
+          <span class="prog-card-index">${idx + 1}</span>
+          ${card.svg}
+          <div class="cmd-card-name">${card.shortName}</div>
+        `;
+        chip.addEventListener('click', () => openCmdCardModal(card));
+        seq.appendChild(chip);
+
+        if (isExec) activeChipEl = chip;
+
+        if (idx < ids.length - 1) {
+          const arrow = document.createElement('span');
+          arrow.className = 'prog-arrow';
+          arrow.textContent = '→';
+          seq.appendChild(arrow);
+        }
+      });
+
+      cardBox.appendChild(seq);
+      dom.focusProgramsList.appendChild(cardBox);
+    });
+
+    if (state.focusMode && activeChipEl) {
+      try {
+        activeChipEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (_) {}
+    }
+  }
+
+  function setFocusMode(enabled) {
+    state.focusMode = !!enabled;
+    document.body.classList.toggle('focus-run-mode', state.focusMode);
+
+    if (state.focusMode && state.view !== 'workspace') {
+      const wsTab = $('.nav-tab[data-view="workspace"]');
+      if (wsTab) wsTab.click();
+    }
+
+    if (dom.btnFocusMode) {
+      dom.btnFocusMode.classList.toggle('active', state.focusMode);
+      dom.btnFocusMode.textContent = state.focusMode ? '✏️ 返回編輯' : '📺 專注瀏覽';
+    }
+
+    renderFocusPrograms();
+    // 等 CSS 欄位寬度切換完成後重新計算最佳地圖格大小
+    requestAnimationFrame(() => renderMapStage());
+    Audio.play('click');
+    appendLog(
+      state.focusMode
+        ? '📺 已切換為「專注瀏覽模式」：僅顯示地圖與全部程式集，讓執行過程更清楚！'
+        : '✏️ 已返回完整編輯模式。',
+      'highlight'
+    );
+  }
+
+  // ==================== 匯出主程式與函式指令集 PNG 圖片 ====================
+  async function handleExportProgramImage() {
+    if (!ProgramExporter) return;
+    const pos = getEffectiveStartPos();
+    const startCoordText = pos ? Engine.formatCoord(pos.col, pos.row) : '未設定';
+    const initialDirText = Engine.DIR_VECTORS[state.initialDir]?.name || '';
+    const mapTitle = dom.presetSelect.options[dom.presetSelect.selectedIndex]?.textContent || `${state.map.cols}×${state.map.rows} 地圖`;
+
+    try {
+      const result = await ProgramExporter.generateProgramImage({
+        programs: state.programs,
+        startCoordText,
+        initialDirText,
+        mapTitle
+      });
+
+      const fileName = `coding-robot-programs-${new Date().toISOString().slice(0, 10)}.png`;
+      const modalContent = dom.cardModal.querySelector('.modal-content');
+      if (modalContent) modalContent.classList.add('modal-wide');
+
+      // 檢查是否支援系統原生分享圖片（iPad Safari 可一鍵存進「照片」相簿）
+      let canShareFile = false;
+      let shareFile = null;
+      if (result.blob && navigator.canShare && typeof File !== 'undefined') {
+        try {
+          shareFile = new File([result.blob], fileName, { type: 'image/png' });
+          canShareFile = navigator.canShare({ files: [shareFile] });
+        } catch (_) {
+          canShareFile = false;
+        }
+      }
+
+      dom.modalBody.innerHTML = `
+        <h3 style="font-size:1.15rem; font-weight:900; margin-bottom:4px;">🖼️ 匯出程式指令集圖片</h3>
+        <div style="font-size:0.84rem; color:#475569;">
+          已產生高解析 PNG（共 ${result.trackCount} 個軌道・${result.totalCards} 張指令卡，含起點 ${startCoordText} 與初始方向 ${initialDirText}）
+        </div>
+        <div class="export-img-actions">
+          <a id="btnDownloadProgramPng" class="btn btn-primary btn-sm" href="${result.dataUrl}" download="${fileName}">⬇️ 下載 PNG 圖片</a>
+          ${canShareFile ? '<button type="button" id="btnShareProgramPng" class="btn btn-info btn-sm">📤 分享／存到 iPad 相簿</button>' : ''}
+        </div>
+        <div class="export-preview-wrap">
+          <img src="${result.dataUrl}" alt="主程式與函式指令集圖片預覽" class="export-preview-img" />
+        </div>
+        <p class="export-tip">💡 電腦可按「⬇️ 下載 PNG 圖片」直接存檔；iPad 也可按「分享」或直接<strong>長按上方圖片 → 儲存到照片</strong>。</p>
+      `;
+
+      dom.cardModal.classList.remove('hidden');
+      Audio.play('scan');
+      appendLog(`🖼️ 已產生主程式與函式指令集圖片（${result.trackCount} 個軌道・${result.totalCards} 張卡）。`, 'success');
+
+      const shareBtn = $('#btnShareProgramPng');
+      if (shareBtn && shareFile) {
+        shareBtn.addEventListener('click', async () => {
+          try {
+            await navigator.share({
+              title: '兒童互動編程機器人・程式指令集',
+              files: [shareFile]
+            });
+          } catch (_) {}
+        });
+      }
+    } catch (err) {
+      Audio.play('error');
+      appendLog(`❌ 無法匯出圖片：${err.message || err}`, 'error');
+    }
   }
 
   function runValidationPreview(showOkBanner) {
@@ -948,11 +1299,15 @@
       state.runner.stop();
       state.runner = null;
     }
+    state.pickingStartPos = false;
+    state.trailPoints = [];
     state.highlight = { trackId: null, cardIndex: -1, numIndex: -1 };
-    const startTile = Engine.findStartTile(state.map);
+    renderStartPosControl();
+    renderTrailLayer();
+    const startPos = getEffectiveStartPos();
     state.robotVisual = {
-      col: startTile ? startTile.col : 0,
-      row: startTile ? startTile.row : 0,
+      col: startPos ? startPos.col : 0,
+      row: startPos ? startPos.row : 0,
       dir: state.initialDir,
       lightColor: null,
       lightFx: null,
@@ -995,10 +1350,15 @@
       mapState: state.map,
       programs: state.programs,
       initialDir: state.initialDir,
+      initialPos: getEffectiveStartPos(),
       getSpeedMultiplier: () => parseFloat(dom.speedSelect.value) || 1,
       onStateChange(st) {
         state.robotVisual = st;
+        if (Array.isArray(st.trail)) {
+          state.trailPoints = st.trail;
+        }
         updateStatusPill(st.status);
+        renderTrailLayer();
         renderRobotLayer();
       },
       onLog(msg, lvl) {
@@ -1047,6 +1407,8 @@
     } else {
       state.initialDir = 0;
     }
+    state.startPos = null;
+    state.pickingStartPos = false;
     renderInitialDirPicker();
 
     state.map.tiles = preset.tiles.map(t => ({
@@ -1273,6 +1635,8 @@
 
   function closeModal() {
     dom.cardModal.classList.add('hidden');
+    const modalContent = dom.cardModal.querySelector('.modal-content');
+    if (modalContent) modalContent.classList.remove('modal-wide');
   }
 
   // ==================== 綁定事件 ====================
@@ -1302,13 +1666,41 @@
       dom.btnMute.textContent = next ? '🔇 已靜音' : '🔊 音效開';
     });
 
+    // 專注瀏覽模式切換（只顯示地圖＋全部程式集）
+    if (dom.btnFocusMode) {
+      dom.btnFocusMode.addEventListener('click', () => setFocusMode(!state.focusMode));
+    }
+    const btnExitFocus = $('#btnExitFocusMode');
+    if (btnExitFocus) {
+      btnExitFocus.addEventListener('click', () => setFocusMode(false));
+    }
+
+    // 匯出主程式與函式指令集圖片
+    ['#btnExportImg', '#btnTrackExportImg', '#btnFocusExportImg'].forEach(sel => {
+      const b = $(sel);
+      if (b) b.addEventListener('click', handleExportProgramImage);
+    });
+
     // 套件數量模式切換
     dom.btnToggleStock.addEventListener('click', () => {
       state.enforceStock = !state.enforceStock;
       dom.stockModeText.textContent = state.enforceStock ? '嚴格盒裝數量' : '自由模式';
       renderCmdPalette();
       runValidationPreview(false);
+      saveSessionState();
     });
+
+    // 機器人移動軌跡顯示開關
+    if (dom.btnToggleTrail) {
+      dom.btnToggleTrail.addEventListener('click', () => {
+        state.showTrail = !state.showTrail;
+        renderTrailToggle();
+        renderTrailLayer();
+        saveSessionState();
+        Audio.play('click');
+        appendLog(state.showTrail ? '🛤️ 已開啟「機器人移動軌跡路線」顯示。' : '🛤️ 已關閉「機器人移動軌跡路線」顯示。');
+      });
+    }
 
     // 載入範本
     $('#btnLoadPreset').addEventListener('click', () => {
@@ -1351,13 +1743,33 @@
     $('#btnClearMap').addEventListener('click', () => {
       state.map.tiles = [];
       state.map.corridorBox = null;
+      state.startPos = null;
+      state.pickingStartPos = false;
       state.selectedTileUid = null;
       resetRunner();
       renderMapStage();
       renderSelectedTileBar();
+      renderStartPosControl();
       saveSessionState();
       appendLog('🧹 已清空地圖，請從下方拖曳「起點地圖卡」與其他地圖卡自由排布。');
     });
+
+    // 自由調整機器人起點位置（點擊按鈕切換「點選起點模式」）
+    if (dom.btnPickStartPos) {
+      dom.btnPickStartPos.addEventListener('click', () => {
+        if (state.runner && state.runner.isRunning()) {
+          appendLog('⚠️ 請先停止或重置程式，再調整機器人起始位置。', 'warn');
+          return;
+        }
+        state.pickingStartPos = !state.pickingStartPos;
+        if (state.pickingStartPos) {
+          state.pickedMapCardId = null;
+          renderMapPalette();
+          appendLog('📍 請直接點選地圖上任一格，將機器人起始位置移至該格！', 'highlight');
+        }
+        renderStartPosControl();
+      });
+    }
 
     // 機器人初始方向選擇（上 / 下 / 左 / 右）
     if (dom.initialDirPicker) {
@@ -1368,7 +1780,13 @@
       });
     }
 
-    // 已選取地圖卡的快捷操作：翻面 / 旋轉 / 說明 / 移除
+    // 已選取地圖卡的快捷操作：設為起點 / 翻面 / 旋轉 / 說明 / 移除
+    $('#btnTileSetStart').addEventListener('click', () => {
+      const tile = state.map.tiles.find(t => t.uid === state.selectedTileUid);
+      if (!tile) return;
+      setCustomStartPos(tile.col, tile.row);
+    });
+
     $('#btnTileFlip').addEventListener('click', () => {
       const tile = state.map.tiles.find(t => t.uid === state.selectedTileUid);
       if (!tile) return;
@@ -1559,6 +1977,11 @@
             state.initialDir = parsed.initialDir;
             renderInitialDirPicker();
           }
+          if (parsed.startPos && typeof parsed.startPos.col === 'number' && typeof parsed.startPos.row === 'number') {
+            state.startPos = { col: parsed.startPos.col, row: parsed.startPos.row };
+          } else {
+            state.startPos = null;
+          }
           if (parsed.map && Array.isArray(parsed.map.tiles)) {
             state.map.cols = parsed.map.cols || 6;
             state.map.rows = parsed.map.rows || 5;
@@ -1652,6 +2075,8 @@
 
     renderMapPalette();
     renderCmdPalette();
+    renderTrailToggle();
+    dom.stockModeText.textContent = state.enforceStock ? '嚴格盒裝數量' : '自由模式';
 
     // 若瀏覽器有先前自動暫存的進度則還原，否則載入預設「自然保育區」範本
     const restored = loadSessionState();

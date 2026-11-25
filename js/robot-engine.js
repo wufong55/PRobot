@@ -407,6 +407,7 @@
       mapState,
       programs,
       initialDir,
+      initialPos,
       onStateChange,
       onLog,
       onHighlight,
@@ -421,25 +422,39 @@
     let singleStepMode = false;
 
     const startTile = findStartTile(mapState);
+    const hasCustomStart =
+      initialPos &&
+      typeof initialPos.col === 'number' &&
+      typeof initialPos.row === 'number' &&
+      !!getCellInfo(mapState, initialPos.col, initialPos.row);
+
+    const resolvedStartCol = hasCustomStart ? initialPos.col : (startTile ? startTile.col : null);
+    const resolvedStartRow = hasCustomStart ? initialPos.row : (startTile ? startTile.row : null);
+
     const fallbackDir = startTile ? ((((startTile.rotation || 0) % 360) + 360) % 360) / 90 : 0;
     const initDir = (typeof initialDir === 'number' && initialDir >= 0 && initialDir <= 3)
       ? initialDir
       : fallbackDir;
 
     const robotState = {
-      col: startTile ? startTile.col : 0,
-      row: startTile ? startTile.row : 0,
+      col: resolvedStartCol !== null ? resolvedStartCol : 0,
+      row: resolvedStartRow !== null ? resolvedStartRow : 0,
       dir: initDir, // 0:右, 1:下, 2:左, 3:上
       lightColor: null,
       lightFx: null,
       gearState: 'idle', // idle | cw | ccw | wait
       bubbleText: '',
       scannedEvents: [],
+      trail: [], // [{ col, row, kind: 'start'|'move'|'base_in'|'base_out' }]
       status: 'ready' // ready | running | paused | finished | error
     };
 
     function emitState() {
-      if (onStateChange) onStateChange(Object.assign({}, robotState));
+      if (onStateChange) {
+        onStateChange(Object.assign({}, robotState, {
+          trail: robotState.trail.slice()
+        }));
+      }
     }
 
     function log(msg, level) {
@@ -529,6 +544,7 @@
 
         robotState.col = nextCol;
         robotState.row = nextRow;
+        robotState.trail.push({ col: nextCol, row: nextRow, kind: 'move' });
         robotState.bubbleText = '';
         global.AudioEngine.play('step');
         emitState();
@@ -552,6 +568,17 @@
         emitState();
         log(`${loopTag}${card.name}${repeatTag} → 面向 ${DIR_VECTORS[robotState.dir].name}`);
         await sleep(420);
+
+        // 若轉向後機器人正位於基地卡星星格，且面向與基地卡箭頭方向一致，自動進入基地執行函式
+        if (allowMapTriggers && !aborted) {
+          const curCell = getCellInfo(mapState, robotState.col, robotState.row);
+          if (curCell && curCell.isTriggerCell && curCell.sideDef.funcColor) {
+            const baseDir = ((((curCell.tile.rotation || 0) % 360) + 360) % 360) / 90;
+            if (robotState.dir === baseDir) {
+              await checkCellTrigger(curCell, true);
+            }
+          }
+        }
         return;
       }
 
@@ -643,43 +670,89 @@
     }
 
     // 掃描地圖卡觸發（基地卡函式 & 事件卡條件語句）
-    async function checkCellTrigger(cell) {
+    // onlyBase=true 時僅檢查基地卡（用於在星星格原地轉向或起點即面向箭頭時）
+    async function checkCellTrigger(cell, onlyBase) {
       if (!cell || !cell.isTriggerCell) return;
       const side = cell.sideDef;
 
       // A. 基地卡觸發對應函式
+      // 規則：只要機器人位於基地卡星星記號格且面向與基地卡內箭頭方向相同，
+      // 就會自動前進一步進入基地本體格、執行對應函式，執行結束後自動退回星星記號處，繼續主程式。
       if (side.funcColor) {
         const colorName = side.funcColor === 'red' ? '紅色' : (side.funcColor === 'green' ? '綠色' : '藍色');
+        const baseDir = ((((cell.tile.rotation || 0) % 360) + 360) % 360) / 90;
+
+        if (robotState.dir !== baseDir) {
+          if (!onlyBase) {
+            log(
+              `ℹ️ 機器人位於【${colorName}函式基地卡】星星格，但目前面向 ${DIR_VECTORS[robotState.dir].name} 與基地箭頭方向 ${DIR_VECTORS[baseDir].name} 不同，未啟動基地函式。`,
+              'warn'
+            );
+          }
+          return;
+        }
+
+        const starCol = robotState.col;
+        const starRow = robotState.row;
+        const dirVec = DIR_VECTORS[baseDir];
+        const baseCol = starCol + dirVec.dx;
+        const baseRow = starRow + dirVec.dy;
         const funcSteps = compiledFuncs[side.funcColor] || [];
+
         global.AudioEngine.play('scan');
+        log(
+          `⭐ 方向與【${colorName}函式基地卡】箭頭一致（${dirVec.name}）→ 自動前進一步進入基地 ${formatCoord(baseCol, baseRow)}！`,
+          'highlight'
+        );
+
+        // 自動前進一步進入基地本體格
+        const enteredBase = !!getCellInfo(mapState, baseCol, baseRow);
+        if (enteredBase) {
+          robotState.col = baseCol;
+          robotState.row = baseRow;
+          robotState.trail.push({ col: baseCol, row: baseRow, kind: 'base_in' });
+          robotState.bubbleText = `⭐ 進入${colorName}基地`;
+          global.AudioEngine.play('step');
+          emitState();
+          await sleep(500);
+        }
+
+        if (aborted) return;
+
         if (funcSteps.length > 0) {
-          log(`⭐ 掃描到【${colorName}函式基地卡】→ 進入執行「${colorName}函式」！`, 'highlight');
+          log(`▶️ 開始執行「${colorName}函式」！`, 'highlight');
           robotState.bubbleText = `⭐ 執行${colorName}函式`;
           emitState();
-          await sleep(350);
-
-          const savedCol = robotState.col;
-          const savedRow = robotState.row;
+          await sleep(260);
 
           for (const fStep of funcSteps) {
             if (aborted) return;
             await executeStep(fStep, false);
           }
-
-          if (!aborted) {
-            robotState.col = savedCol;
-            robotState.row = savedRow;
-            emitState();
-            log(`↩️ 「${colorName}函式」執行結束，回到基地卡繼續主程式。`, 'highlight');
-          }
         } else {
-          log(`⭐ 掃描到【${colorName}函式基地卡】，但尚未編寫「${colorName}函式」。`, 'warn');
+          log(`⚠️ 已進入【${colorName}函式基地卡】，但尚未編寫「${colorName}函式」。`, 'warn');
+        }
+
+        if (aborted) return;
+
+        // 執行完函式後自動退回星星記號格，再繼續走主程式
+        if (enteredBase) {
+          robotState.col = starCol;
+          robotState.row = starRow;
+          robotState.trail.push({ col: starCol, row: starRow, kind: 'base_out' });
+          robotState.bubbleText = `↩️ 退回星星格 ${formatCoord(starCol, starRow)}`;
+          global.AudioEngine.play('step');
+          emitState();
+          log(`↩️ 「${colorName}函式」執行結束，自動退回星星記號處 ${formatCoord(starCol, starRow)}，繼續主程式。`, 'highlight');
+          await sleep(500);
+          robotState.bubbleText = '';
+          emitState();
         }
         return;
       }
 
       // B. 事件地圖卡觸發條件語句（或預設行為）
-      if (side.role === 'event' && side.eventId) {
+      if (!onlyBase && side.role === 'event' && side.eventId) {
         const evId = side.eventId;
         if (!robotState.scannedEvents.includes(evId)) {
           robotState.scannedEvents.push(evId);
@@ -733,8 +806,8 @@
 
     async function start(isSingleStep) {
       if (running) return;
-      if (!startTile) {
-        log('❌ 地圖上還沒有放置「起點地圖卡」！請先拖曳一張起點地圖卡到地圖上。', 'error');
+      if (resolvedStartCol === null || resolvedStartRow === null) {
+        log('❌ 地圖上還沒有可出發的起始位置！請先放置「起點地圖卡」或點選「📍 起點位置」指定出發格。', 'error');
         robotState.status = 'error';
         emitState();
         if (onFinish) onFinish('error');
@@ -745,9 +818,20 @@
       aborted = false;
       singleStepMode = !!isSingleStep;
       paused = false;
+      robotState.trail = [{ col: robotState.col, row: robotState.row, kind: 'start' }];
       robotState.status = 'running';
       emitState();
       log(`🚀 開始執行主程式！起點位置 ${formatCoord(robotState.col, robotState.row)}，初始面向 ${DIR_VECTORS[robotState.dir].name}`, 'success');
+
+      // 若起始位置本身就在基地卡星星格且初始方向與基地箭頭相同，立即觸發進入基地與函式
+      const startCell = getCellInfo(mapState, robotState.col, robotState.row);
+      if (startCell && startCell.isTriggerCell && startCell.sideDef.funcColor) {
+        const baseDir = ((((startCell.tile.rotation || 0) % 360) + 360) % 360) / 90;
+        if (robotState.dir === baseDir && !aborted) {
+          await waitGate();
+          if (!aborted) await checkCellTrigger(startCell, true);
+        }
+      }
 
       for (const step of compiledMain) {
         if (aborted) break;

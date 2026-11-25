@@ -62,7 +62,9 @@
     </nav>
 
     <div class="header-actions">
-      <button id="btnToggleStock" class="btn btn-ghost btn-sm" title="切換實體盒裝數量提醒模式">📦 套件數量：<span id="stockModeText">自由模式</span></button>
+      <button id="btnFocusMode" class="btn btn-focus-toggle btn-sm" title="切換只顯示地圖與程式集，跑程式更清楚">📺 專注瀏覽</button>
+      <button id="btnExportImg" class="btn btn-ghost btn-sm" title="將主程式與所有函式匯出成 PNG 指令集圖片">🖼️ 匯出指令圖</button>
+      <button id="btnToggleStock" class="btn btn-ghost btn-sm" title="切換實體盒裝數量限制或自由無限模式">📦 套件數量：<span id="stockModeText">嚴格盒裝數量</span></button>
       <button id="btnMute" class="btn btn-ghost btn-sm" title="開啟或靜音音效">🔊 音效開</button>
       <button id="btnExport" class="btn btn-ghost btn-sm" title="匯出地圖與程式 JSON">💾 匯出</button>
       <label class="btn btn-ghost btn-sm file-label" title="匯入先前儲存的 JSON">
@@ -119,6 +121,9 @@
           <button id="btnReset" class="btn btn-secondary">⏹ 重置位置</button>
         </div>
         <div class="run-meta">
+          <button type="button" id="btnPickStartPos" class="btn btn-sm btn-start-pos" title="點選後再點地圖任一格，即可自由調整機器人的起始位置">
+            📍 起點：<span id="startPosCoordText">H8</span>（點擊調整）
+          </button>
           <div class="dir-picker" id="initialDirPicker" role="group" aria-label="設定機器人初始方向">
             <span class="dir-picker-label">初始方向</span>
             <button type="button" class="dir-btn" data-dir="3" title="初始面向：上 (↑)">⬆️ 上</button>
@@ -134,6 +139,9 @@
               <option value="2">2× 快速</option>
             </select>
           </label>
+          <button type="button" id="btnToggleTrail" class="btn btn-sm btn-trail-toggle active" title="開啟或關閉機器人執行時的移動軌跡路線">
+            🛤️ 移動軌跡：<span id="trailStateText">開</span>
+          </button>
           <div class="robot-status-pill" id="robotStatusPill">就緒</div>
         </div>
       </div>
@@ -146,6 +154,7 @@
           <span id="selTileCoord">(1, 1)</span>
         </div>
         <div class="selected-tile-actions">
+          <button id="btnTileSetStart" class="btn btn-sm btn-info">📍 設為機器人起點</button>
           <button id="btnTileFlip" class="btn btn-sm btn-secondary">🔄 翻面（前/背）</button>
           <button id="btnTileRotate" class="btn btn-sm btn-secondary">↪️ 旋轉 90°</button>
           <button id="btnTileInfo" class="btn btn-sm btn-ghost">ℹ️ 說明</button>
@@ -193,6 +202,7 @@
             <button class="track-tab" data-track="condition">🔀 條件 IF <span class="badge" id="badge-condition">0</span></button>
           </div>
           <div class="track-actions">
+            <button id="btnTrackExportImg" class="btn btn-sm btn-info" title="將主程式與函式匯出為圖片">🖼️ 匯出圖片</button>
             <button id="btnAutoWrap" class="btn btn-sm btn-secondary" title="自動補齊此軌道的起點卡與終點卡">✨ 補起終點</button>
             <button id="btnValidate" class="btn btn-sm btn-ghost">✅ 檢查語法</button>
             <button id="btnClearTrack" class="btn btn-sm btn-danger-outline">清空此軌</button>
@@ -203,6 +213,21 @@
 
         <!-- 指令卡拖放排序槽 -->
         <div id="programTrack" class="program-track" aria-label="程式指令序列"></div>
+      </div>
+
+      <!-- 專注瀏覽模式專用：一次展開顯示主程式與所有函式程式集 -->
+      <div id="focusProgramsPanel" class="focus-programs-panel" aria-label="全部程式指令集檢視">
+        <div class="panel-header compact">
+          <div class="panel-title-group">
+            <h2>📜 程式集總覽（主程式＋函式）</h2>
+            <span class="hint-badge">執行時會即時高亮目前正在執行的指令卡</span>
+          </div>
+          <div class="focus-panel-actions">
+            <button id="btnFocusExportImg" class="btn btn-sm btn-info">🖼️ 匯出指令圖片</button>
+            <button id="btnExitFocusMode" class="btn btn-sm btn-secondary">✏️ 返回編輯</button>
+          </div>
+        </div>
+        <div id="focusProgramsList" class="focus-programs-list"></div>
       </div>
 
       <!-- 下部：語法檢查與機器人執行日誌 -->
@@ -256,6 +281,7 @@
   <script src="js/audio-engine.js"></script>
   <script src="js/robot-engine.js"></script>
   <script src="js/touch-dnd.js"></script>
+  <script src="js/program-exporter.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
